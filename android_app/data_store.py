@@ -19,6 +19,7 @@ def empty_data():
         "changes": [],
         "last_tab": 0,
         "last_deck": "",
+        "gemini_api_key": "",
     }
 
 
@@ -55,6 +56,7 @@ def normalize_data(data):
     normalized.setdefault("changes", [])
     normalized.setdefault("last_tab", 0)
     normalized.setdefault("last_deck", "")
+    normalized.setdefault("gemini_api_key", "")
 
     if not isinstance(normalized["decks"], dict):
         raise ValueError("A lista de decks no arquivo não é válida.")
@@ -254,8 +256,29 @@ def map_scryfall_type(type_line):
     return "Outros"
 
 
+def _parse_scryfall_card(data):
+    """Extrai os dados da carta retornados pela Scryfall API."""
+    colors = data.get("colors", [])
+    if not colors and "card_faces" in data:
+        colors = data["card_faces"][0].get("colors", [])
+    color_code = "".join(colors) if colors else "C"
+
+    img = data.get("image_uris", {}).get("normal", "")
+    if not img and "card_faces" in data:
+        img = data["card_faces"][0].get("image_uris", {}).get("normal", "")
+
+    return {
+        "name": data.get("name"),
+        "printed_name": data.get("printed_name", ""),
+        "cmc": int(data.get("cmc", 0)),
+        "color": color_code,
+        "type": map_scryfall_type(data.get("type_line", "")),
+        "image_url": img,
+    }
+
+
 def fetch_scryfall_card_info(query):
-    """Consulta os dados e imagem oficial da carta na Scryfall API."""
+    """Consulta os dados e imagem oficial da carta na Scryfall API (suporte a inglês e português)."""
     import urllib.parse
     import urllib.request
 
@@ -263,46 +286,201 @@ def fetch_scryfall_card_info(query):
     if not query:
         return None
 
-    headers = {"User-Agent": "ManaVaultApp/1.7.0", "Accept": "application/json"}
+    headers = {"User-Agent": "ManaVaultApp/1.8.0", "Accept": "application/json"}
+    
+    # 1. Tentativa de busca fuzzy direta
     url = "https://api.scryfall.com/cards/named?fuzzy=" + urllib.parse.quote(query)
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=7) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            colors = data.get("colors", [])
-            color_code = "".join(colors) if colors else "C"
-            img = data.get("image_uris", {}).get("normal", "")
-            if not img and "card_faces" in data:
-                img = data["card_faces"][0].get("image_uris", {}).get("normal", "")
-            return {
-                "name": data.get("name"),
-                "cmc": int(data.get("cmc", 0)),
-                "color": color_code,
-                "type": map_scryfall_type(data.get("type_line", "")),
-                "image_url": img,
-            }
+            return _parse_scryfall_card(data)
     except Exception:
+        pass
+
+    # 2. Tentativas multilíngues (inclusive cartas impressas em português)
+    for q_pattern in [
+        query,
+        f'include_multilingual=true "{query}"',
+        f'lang:pt "{query}"',
+    ]:
         try:
-            s_url = "https://api.scryfall.com/cards/search?q=" + urllib.parse.quote(query)
+            s_url = "https://api.scryfall.com/cards/search?q=" + urllib.parse.quote(q_pattern)
             s_req = urllib.request.Request(s_url, headers=headers)
             with urllib.request.urlopen(s_req, timeout=7) as s_resp:
                 s_data = json.loads(s_resp.read().decode("utf-8"))
                 if s_data.get("data"):
-                    card = s_data["data"][0]
-                    colors = card.get("colors", [])
-                    color_code = "".join(colors) if colors else "C"
-                    img = card.get("image_uris", {}).get("normal", "")
-                    if not img and "card_faces" in card:
-                        img = card["card_faces"][0].get("image_uris", {}).get("normal", "")
-                    return {
-                        "name": card.get("name"),
-                        "cmc": int(card.get("cmc", 0)),
-                        "color": color_code,
-                        "type": map_scryfall_type(card.get("type_line", "")),
-                        "image_url": img,
-                    }
+                    return _parse_scryfall_card(s_data["data"][0])
         except Exception:
-            return None
+            pass
+
+    return None
+
+
+def clean_ocr_line(line):
+    """Remove caracteres especiais preservando letras acentuadas e nomes de cartas."""
+    cleaned = re.sub(r"[^a-zA-Z0-9\s,\'’\-áéíóúâêîôûãõçÁÉÍÓÚÂÊÎÔÛÃÕÇ]", "", str(line or "")).strip()
+    return cleaned
+
+
+def scale_image_for_ocr(image_path, max_dim=1200):
+    """Redimensiona a foto para envio leve e rápido para OCR (usa Android BitmapFactory nativo se disponível)."""
+    try:
+        from jnius import autoclass
+        BitmapFactory = autoclass("android.graphics.BitmapFactory")
+        BitmapFactoryOptions = autoclass("android.graphics.BitmapFactory$Options")
+        ByteArrayOutputStream = autoclass("java.io.ByteArrayOutputStream")
+        CompressFormat = autoclass("android.graphics.Bitmap$CompressFormat")
+
+        options = BitmapFactoryOptions()
+        options.inJustDecodeBounds = True
+        BitmapFactory.decodeFile(str(image_path), options)
+        w, h = int(options.outWidth), int(options.outHeight)
+
+        sample_size = 1
+        while (w // sample_size) > max_dim or (h // sample_size) > max_dim:
+            sample_size *= 2
+
+        options.inJustDecodeBounds = False
+        options.inSampleSize = sample_size
+        bmp = BitmapFactory.decodeFile(str(image_path), options)
+        if bmp:
+            bos = ByteArrayOutputStream()
+            bmp.compress(CompressFormat.JPEG, 80, bos)
+            raw_bytes = bytes(bos.toByteArray())
+            bmp.recycle()
+            if raw_bytes:
+                return raw_bytes
+    except Exception:
+        pass
+
+    try:
+        return Path(image_path).read_bytes()
+    except Exception:
+        return b""
+
+
+def ocr_image_to_text(image_bytes):
+    """Executa OCR gratuito e rápido da imagem da carta via API OCR.space."""
+    if not image_bytes:
+        return ""
+    import base64
+    import urllib.parse
+    import urllib.request
+
+    b64_str = "data:image/jpeg;base64," + base64.b64encode(image_bytes).decode("utf-8")
+    post_data = urllib.parse.urlencode({
+        "apikey": "helloworld",
+        "base64Image": b64_str,
+        "language": "por",
+        "OCREngine": "2",
+        "detectOrientation": "true",
+        "scale": "true",
+    }).encode("utf-8")
+
+    req = urllib.request.Request("https://api.ocr.space/parse/image", data=post_data)
+    try:
+        with urllib.request.urlopen(req, timeout=18) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            results = data.get("ParsedResults", [])
+            if results:
+                return str(results[0].get("ParsedText", ""))
+    except Exception:
+        pass
+    return ""
+
+
+def identify_card_with_gemini(api_key, image_bytes):
+    """Identifica a carta usando a IA multimodal Gemini Vision se uma chave for configurada."""
+    if not api_key or not image_bytes:
+        return None
+    import base64
+    import urllib.request
+
+    b64_data = base64.b64encode(image_bytes).decode("utf-8")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key.strip()}"
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": (
+                    "Identifique a carta de Magic: The Gathering nesta foto. "
+                    "Responda ESTRITAMENTE em formato JSON com o seguinte schema: "
+                    '{"name": "Nome Oficial em Ingles", "printed_name": "Nome em Portugues se aplicavel", "type": "Tipo", "cmc": 0, "color": "C"}'
+                )},
+                {"inline_data": {"mime_type": "image/jpeg", "data": b64_data}}
+            ]
+        }],
+        "generationConfig": {"response_mime_type": "application/json"}
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            res = json.loads(resp.read().decode("utf-8"))
+            text = res["candidates"][0]["content"]["parts"][0]["text"]
+            parsed = json.loads(text)
+            if parsed.get("name"):
+                card_scryfall = fetch_scryfall_card_info(parsed["name"])
+                if card_scryfall:
+                    return card_scryfall
+                return {
+                    "name": parsed["name"],
+                    "printed_name": parsed.get("printed_name", ""),
+                    "cmc": int(parsed.get("cmc", 0)),
+                    "color": str(parsed.get("color", "C")),
+                    "type": str(parsed.get("type", "Outros")),
+                    "image_url": "",
+                }
+    except Exception:
+        pass
+    return None
+
+
+def identify_card_from_photo(image_path, gemini_api_key=None):
+    """Fluxo inteligente de identificação: extrai o nome da carta da foto e busca atributos no Scryfall."""
+    image_bytes = scale_image_for_ocr(image_path)
+    if not image_bytes:
+        return None, ""
+
+    # Se houver chave do Gemini configurada, tenta a IA visual primeiro
+    if gemini_api_key:
+        card = identify_card_with_gemini(gemini_api_key, image_bytes)
+        if card:
+            return card, card["name"]
+
+    # OCR gratuito integrado
+    raw_text = ocr_image_to_text(image_bytes)
+    if not raw_text:
+        return None, ""
+
+    lines = raw_text.splitlines()
+    candidates = []
+    ignored = {
+        "creature", "instant", "sorcery", "enchantment", "artifact", "land", "planeswalker",
+        "criatura", "mágica instantânea", "feitiço", "encantamento", "artefato", "terreno",
+        "wizards of the coast", "illustrator", "legendary", "lendária", "lendário"
+    }
+
+    for line in lines:
+        cleaned = clean_ocr_line(line)
+        if len(cleaned) < 3:
+            continue
+        if cleaned.lower() in ignored:
+            continue
+        candidates.append(cleaned)
+        if len(candidates) >= 6:
+            break
+
+    for cand in candidates:
+        card = fetch_scryfall_card_info(cand)
+        if card:
+            return card, cand
+
+    best_text = candidates[0] if candidates else ""
+    return None, best_text
 
 
 def check_deck_legality(deck):

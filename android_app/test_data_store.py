@@ -188,6 +188,30 @@ class DataStoreTests(unittest.TestCase):
         bolt = normalized["decks"]["Burn"]["main"]["Lightning Bolt"]
         self.assertIn("image_uri", bolt)
         self.assertEqual(bolt["image_uri"], "")
+        self.assertIn("gemini_api_key", normalized)
+        self.assertEqual(normalized["gemini_api_key"], "")
+
+    def test_ocr_line_cleaning_and_scryfall_parsing(self):
+        from data_store import clean_ocr_line, _parse_scryfall_card
+
+        cleaned = clean_ocr_line("  >> Sol Ring (Artifact) !!  ")
+        self.assertEqual(cleaned, "Sol Ring Artifact")
+
+        card_data = {
+            "name": "Lightning Bolt",
+            "printed_name": "Raio",
+            "cmc": 1.0,
+            "colors": ["R"],
+            "type_line": "Instant",
+            "image_uris": {"normal": "https://cards.scryfall.io/test.jpg"},
+        }
+        parsed = _parse_scryfall_card(card_data)
+        self.assertEqual(parsed["name"], "Lightning Bolt")
+        self.assertEqual(parsed["printed_name"], "Raio")
+        self.assertEqual(parsed["cmc"], 1)
+        self.assertEqual(parsed["color"], "R")
+        self.assertEqual(parsed["type"], "Mágica Instantânea")
+        self.assertEqual(parsed["image_url"], "https://cards.scryfall.io/test.jpg")
 
 
 if __name__ == "__main__":

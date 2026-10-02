@@ -28,7 +28,7 @@ from kivy.uix.screenmanager import NoTransition, Screen, ScreenManager
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
-from kivy.utils import get_color_from_hex
+from kivy.utils import get_color_from_hex, platform
 
 from data_store import (
     DataStore,
@@ -40,6 +40,7 @@ from data_store import (
     filter_matches,
     find_card_defaults,
     format_decklist,
+    identify_card_from_photo,
     normalize_keyword_search,
     normalize_tags,
     parse_decklist_text,
@@ -720,13 +721,20 @@ class AddCardsScreen(ManaVaultScreen):
         c_photo.add_widget(self.image_preview_container)
 
         # Botões de Ação da Foto
-        photo_btn_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
-        photo_btn_row.add_widget(make_button("📷  Tirar / Escolher Foto", self.choose_or_take_photo, color=COLOR_ACCENT, height=40, font_size=12))
-        photo_btn_row.add_widget(make_button("🌐  Buscar Arte Oficial", self.fetch_official_art, color=COLOR_SURFACE_2, height=40, font_size=12))
-        c_photo.add_widget(photo_btn_row)
+        photo_btn_row1 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
+        photo_btn_row1.add_widget(make_button("📸  Tirar Foto (Câmera)", self.take_photo_camera, color=COLOR_ACCENT, height=40, font_size=12))
+        photo_btn_row1.add_widget(make_button("🖼️  Escolher da Galeria", self.choose_from_gallery, color=COLOR_SURFACE_2, height=40, font_size=12))
+        c_photo.add_widget(photo_btn_row1)
 
-        remove_photo_btn = make_button("❌  Remover Foto Desta Carta", self.remove_photo, color=COLOR_SURFACE_3, height=32, font_size=11)
-        c_photo.add_widget(remove_photo_btn)
+        photo_btn_row2 = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(6))
+        photo_btn_row2.add_widget(make_button("🔍  Identificar da Foto", self.scan_current_photo, color=COLOR_SURFACE_2, height=36, font_size=11))
+        photo_btn_row2.add_widget(make_button("🌐  Buscar Arte Oficial", self.fetch_official_art, color=COLOR_SURFACE_2, height=36, font_size=11))
+        c_photo.add_widget(photo_btn_row2)
+
+        photo_btn_row3 = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(6))
+        photo_btn_row3.add_widget(make_button("⚙️  Configurar IA (Opcional)", self.show_ai_settings_dialog, color=COLOR_SURFACE_3, height=30, font_size=10))
+        photo_btn_row3.add_widget(make_button("❌  Remover Foto", self.remove_photo, color=COLOR_SURFACE_3, height=30, font_size=10))
+        c_photo.add_widget(photo_btn_row3)
         self.content.add_widget(c_photo)
 
         # Card 3: Identificação da Carta
@@ -808,10 +816,87 @@ class AddCardsScreen(ManaVaultScreen):
         self.feedback_label.text = "Foto removida desta carta."
         self.feedback_label.color = COLOR_TEXT_MUTED
 
-    def choose_or_take_photo(self, *_):
-        """Abre a câmera nativa ou galeria de imagens para escolher/tirar foto."""
+    def take_photo_camera(self, *_):
+        """Dispara a câmera nativa do Android para fotografar a carta em alta resolução."""
+        if platform == "android":
+            try:
+                from android.permissions import Permission, request_permissions
+
+                def on_perm(perms, grants):
+                    if all(grants):
+                        self._launch_android_camera()
+                    else:
+                        self.feedback_label.text = "Permissão de câmera é necessária para fotografar a carta."
+                        self.feedback_label.color = COLOR_DANGER
+
+                request_permissions([Permission.CAMERA], on_perm)
+            except Exception:
+                self._launch_android_camera()
+        else:
+            self.choose_from_gallery()
+
+    def _launch_android_camera(self):
+        try:
+            from jnius import autoclass
+            from android import activity
+
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            currentActivity = PythonActivity.mActivity
+            ContentValues = autoclass("android.content.ContentValues")
+            MediaStoreImagesMedia = autoclass("android.provider.MediaStore$Images$Media")
+            Intent = autoclass("android.content.Intent")
+            MediaStore = autoclass("android.provider.MediaStore")
+
+            values = ContentValues()
+            values.put(MediaStoreImagesMedia.TITLE, f"ManaVault_card_{int(time.time())}")
+            values.put(MediaStoreImagesMedia.MIME_TYPE, "image/jpeg")
+
+            content_resolver = currentActivity.getContentResolver()
+            self._pending_camera_uri = content_resolver.insert(MediaStoreImagesMedia.EXTERNAL_CONTENT_URI, values)
+
+            intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+            intent.putExtra(MediaStore.EXTRA_OUTPUT, self._pending_camera_uri)
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+
+            activity.bind(on_activity_result=self._on_camera_activity_result)
+            currentActivity.startActivityForResult(intent, 0xCA01)
+        except Exception as e:
+            self.feedback_label.text = f"Erro ao abrir câmera: {e}"
+            self.feedback_label.color = COLOR_DANGER
+
+    def _on_camera_activity_result(self, request_code, result_code, data):
+        if request_code == 0xCA01:
+            try:
+                from android import activity
+                activity.unbind(on_activity_result=self._on_camera_activity_result)
+            except Exception:
+                pass
+
+            if result_code == -1:  # Activity.RESULT_OK
+                pending_uri = getattr(self, "_pending_camera_uri", None)
+                if pending_uri and SharedStorage is not None:
+                    try:
+                        private_file = SharedStorage().copy_from_shared(pending_uri.toString())
+                        if private_file:
+                            Clock.schedule_once(lambda dt: self._on_photo_ready(private_file), 0)
+                            return
+                    except Exception as e:
+                        Clock.schedule_once(lambda dt: self.app_ref.set_status(f"Erro ao obter foto: {e}"), 0)
+            else:
+                # Cancelado: remove o registro vazio gerado no MediaStore
+                pending_uri = getattr(self, "_pending_camera_uri", None)
+                if pending_uri:
+                    try:
+                        from jnius import autoclass
+                        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+                        PythonActivity.mActivity.getContentResolver().delete(pending_uri, None, None)
+                    except Exception:
+                        pass
+
+    def choose_from_gallery(self, *_):
+        """Abre a galeria ou seletor de imagens do celular."""
         if Chooser is not None and SharedStorage is not None:
-            self.chooser = Chooser(self._on_image_chosen_android)
+            self.chooser = Chooser(self._on_gallery_chosen_android)
             self.chooser.choose_content("image/*")
         else:
             # Fallback desktop testing
@@ -826,35 +911,129 @@ class AddCardsScreen(ManaVaultScreen):
                 )
                 root.destroy()
                 if file_path:
-                    self._save_local_photo(file_path)
+                    self._on_photo_ready(file_path)
             except Exception as e:
                 self.app_ref.set_status(f"Seleção de foto disponível no APK: {e}")
 
-    def _on_image_chosen_android(self, shared_files):
+    def _on_gallery_chosen_android(self, shared_files):
         if not shared_files:
             return
         try:
             private_file = SharedStorage().copy_from_shared(shared_files[0])
             if private_file:
-                Clock.schedule_once(lambda dt: self._save_local_photo(private_file), 0)
+                Clock.schedule_once(lambda dt: self._on_photo_ready(private_file), 0)
         except Exception as e:
             Clock.schedule_once(lambda dt: self.app_ref.set_status(f"Erro ao carregar foto: {e}"), 0)
 
-    def _save_local_photo(self, source_path):
+    def _on_photo_ready(self, source_path):
+        """Salva a imagem localmente, exibe o preview e dispara o reconhecimento automático."""
         try:
             dest_dir = self.app_ref.images_dir
             dest_dir.mkdir(parents=True, exist_ok=True)
             filename = f"card_{int(time.time() * 1000)}.jpg"
             dest_path = dest_dir / filename
 
-            # Copy file
+            # Salva o arquivo permanentemente
             dest_path.write_bytes(Path(source_path).read_bytes())
             self.set_card_image(str(dest_path))
-            self.feedback_label.text = "✓ Foto da carta carregada e salva com sucesso!"
-            self.feedback_label.color = COLOR_SUCCESS
+
+            # Executa a identificação automática da carta na foto
+            self.scan_current_photo()
         except Exception as e:
-            self.feedback_label.text = f"Erro ao salvar foto: {e}"
+            self.feedback_label.text = f"Erro ao processar foto: {e}"
             self.feedback_label.color = COLOR_DANGER
+
+    def scan_current_photo(self, *_):
+        """Analisa a foto anexada à carta e busca os dados oficiais no Scryfall em segundo plano."""
+        photo_path = self.current_image_uri
+        if not photo_path or not Path(photo_path).is_file():
+            self.feedback_label.text = "Tire uma foto ou escolha da galeria primeiro para identificar."
+            self.feedback_label.color = COLOR_WARNING
+            return
+
+        self.feedback_label.text = "🔍 Analisando foto e identificando carta oficial..."
+        self.feedback_label.color = COLOR_ACCENT
+
+        def worker():
+            gemini_key = self.app_ref.get_gemini_key()
+            card_info, best_text = identify_card_from_photo(photo_path, gemini_api_key=gemini_key)
+            Clock.schedule_once(lambda dt: self._on_card_identified(card_info, best_text), 0)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_card_identified(self, card_info, best_text):
+        """Preenche automaticamente os campos da carta reconhecida."""
+        if card_info:
+            card_name = card_info.get("name", "")
+            printed_name = card_info.get("printed_name", "")
+
+            self.name_input.text = card_name
+            self.cmc_input.text = str(card_info.get("cmc", 0))
+            self.custom_color_input.text = card_info.get("color", "C")
+
+            matched_opt = None
+            for opt_text, opt_code in COLOR_OPTIONS_MAP.items():
+                if opt_code == card_info.get("color"):
+                    matched_opt = opt_text
+                    break
+            if matched_opt:
+                self.color_spinner.text = matched_opt
+            else:
+                self.color_spinner.text = "Multicolorida (Duas ou mais cores)"
+
+            card_type = card_info.get("type", "Outros")
+            if card_type in CARD_TYPES:
+                self.type_spinner.text = card_type
+
+            display_title = f"{card_name} ({printed_name})" if printed_name and printed_name != card_name else card_name
+            self.feedback_label.text = f"✓ Carta identificada: {display_title}! Atributos preenchidos."
+            self.feedback_label.color = COLOR_SUCCESS
+        elif best_text:
+            self.name_input.text = best_text
+            self.feedback_label.text = f"Texto lido: '{best_text}'. Verifique ou toque em Buscar."
+            self.feedback_label.color = COLOR_WARNING
+        else:
+            self.feedback_label.text = "Não foi possível ler a carta na foto. Tente uma foto mais nítida com boa iluminação."
+            self.feedback_label.color = COLOR_WARNING
+
+    def show_ai_settings_dialog(self, *_):
+        """Exibe popup para o usuário configurar opcionalmente a chave do Gemini Vision."""
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(14))
+        content.add_widget(make_label(
+            "O ManaVault já identifica cartas gratuitamente via OCR integrado.\n"
+            "Se desejar usar a IA multimodal Gemini Vision para máxima precisão\n"
+            "(inclusive artes alternativas e foils), insira sua chave gratuita:",
+            height=60, font_size=11, color=COLOR_TEXT_MUTED, halign="center"
+        ))
+
+        current_key = self.app_ref.get_gemini_key()
+        key_input = make_input("Chave Gemini API (ex: AIzaSy...)", current_key)
+        key_input.password = True
+        content.add_widget(key_input)
+
+        btn_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+        popup = Popup(
+            title="Configuração de IA Visual (Opcional)",
+            content=content,
+            size_hint=(0.92, 0.46),
+            background_color=(0.1, 0.12, 0.16, 0.96),
+        )
+
+        def save_and_close(*_):
+            new_key = key_input.text.strip()
+            self.app_ref.set_gemini_key(new_key)
+            popup.dismiss()
+            if new_key:
+                self.feedback_label.text = "✓ Chave Gemini Vision salva! IA ativada para fotos."
+                self.feedback_label.color = COLOR_SUCCESS
+            else:
+                self.feedback_label.text = "Chave removida. Usando OCR integrado gratuito."
+                self.feedback_label.color = COLOR_TEXT_MUTED
+
+        btn_row.add_widget(make_button("💾  Salvar", save_and_close, color=COLOR_ACCENT, height=40, font_size=12))
+        btn_row.add_widget(make_button("Cancelar", popup.dismiss, color=COLOR_SURFACE_2, height=40, font_size=12))
+        content.add_widget(btn_row)
+        popup.open()
 
     def fetch_official_art(self, *_):
         """Busca os dados e a foto oficial da carta na Scryfall em segundo plano."""
@@ -1997,6 +2176,28 @@ class ManaVaultApp(App):
             self.set_status("Backup pronto para salvar ou compartilhar.")
         except OSError as exc:
             self.set_status(f"Não foi possível exportar: {exc}")
+
+    def on_start(self):
+        self.request_android_permissions()
+
+    def request_android_permissions(self):
+        if platform == "android":
+            try:
+                from android.permissions import Permission, request_permissions
+                request_permissions([
+                    Permission.CAMERA,
+                    Permission.READ_EXTERNAL_STORAGE,
+                    Permission.WRITE_EXTERNAL_STORAGE,
+                ])
+            except Exception:
+                pass
+
+    def get_gemini_key(self):
+        return str(self.store.data.get("gemini_api_key", "")).strip()
+
+    def set_gemini_key(self, key):
+        self.store.data["gemini_api_key"] = str(key or "").strip()
+        self.store.save()
 
 
 if __name__ == "__main__":
