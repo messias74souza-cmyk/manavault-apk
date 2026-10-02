@@ -1,0 +1,444 @@
+[
+  {
+    "name": "Golpe Duplo",
+    "english": "Double strike",
+    "summary": "A criatura causa dano de combate no passo de iniciativa e novamente no passo normal.",
+    "sections": [
+      [
+        "Sem bloqueadores",
+        "Uma 3/3 sem bloqueio pode causar até 6 de dano ao jogador, se continuar com Golpe Duplo nos dois passos."
+      ],
+      [
+        "Contra bloqueadores",
+        "Se sobreviver ao primeiro passo, causa dano novamente no passo normal. Um bloqueador destruído no primeiro passo não causa dano depois. Contra vários bloqueadores, a criatura atacante segue a ordem de atribuição e precisa atribuir dano letal ao anterior antes de passar ao próximo."
+      ],
+      [
+        "Ao bloquear",
+        "Também causa dano nos dois passos. Se destruir a criatura atacante no passo de iniciativa, ela não estará presente para causar dano no passo normal."
+      ]
+    ]
+  },
+  {
+    "name": "Iniciativa",
+    "english": "First strike",
+    "summary": "A criatura causa dano de combate no passo de iniciativa, antes das criaturas sem Iniciativa ou Golpe Duplo.",
+    "sections": [
+      [
+        "Exemplo",
+        "Uma 3/3 com Iniciativa bloqueia uma 2/2: causa 3 de dano primeiro e pode destruí-la antes que ela cause dano normal."
+      ],
+      [
+        "Contra vários bloqueadores",
+        "A criatura atacante atribui dano seguindo a ordem dos bloqueadores. Dano letal deve ser atribuído ao primeiro antes de atribuir ao próximo. Criaturas destruídas no primeiro passo não causam dano no passo normal."
+      ],
+      [
+        "Ao bloquear",
+        "Se o dano de Iniciativa destruir a criatura atacante, ela não causa dano no passo normal. Se sobreviver, causa dano normalmente nesse segundo passo."
+      ]
+    ]
+  },
+  {
+    "name": "Toque Mortífero",
+    "english": "Deathtouch",
+    "summary": "Qualquer dano maior que zero causado por esta criatura a outra criatura é considerado letal para atribuição de dano.",
+    "sections": [
+      [
+        "Exemplo",
+        "Uma 1/1 com Toque Mortífero pode destruir uma 10/10 ao causar 1 de dano nela."
+      ],
+      [
+        "Contra vários bloqueadores",
+        "Para atribuir dano, 1 ponto de uma fonte com Toque Mortífero conta como letal. Ainda é preciso ter dano suficiente para atribuir pelo menos 1 a cada criatura na ordem; uma 1/1 não consegue atribuir dano a duas criaturas no mesmo passo."
+      ],
+      [
+        "Ao bloquear",
+        "Pode destruir uma criatura atacante com apenas 1 de dano, mas ainda recebe o dano normalmente. Toque Mortífero não evita que ela morra."
+      ]
+    ]
+  },
+  {
+    "name": "Atropelar",
+    "english": "Trample",
+    "summary": "Ao atacar, depois de atribuir dano letal aos bloqueadores, a criatura pode atribuir o dano excedente ao jogador ou planeswalker que está atacando.",
+    "sections": [
+      [
+        "Exemplo",
+        "Uma 7/7 bloqueada por uma 2/2 pode atribuir 2 à criatura e os 5 restantes ao jogador defensor."
+      ],
+      [
+        "Contra vários bloqueadores",
+        "Uma 7/7 bloqueada por duas 2/2 precisa atribuir pelo menos 2 a cada uma antes de passar dano ao jogador; sobram 3, se não houver outros efeitos relevantes. Dano já marcado pode contar para determinar quanto falta para ser letal."
+      ],
+      [
+        "Ao bloquear",
+        "Atropelar não ajuda uma criatura bloqueadora a causar dano ao jogador atacante. A habilidade só permite excedente quando a criatura com Atropelar está atacando."
+      ]
+    ]
+  },
+  {
+    "name": "Vigilância",
+    "english": "Vigilance",
+    "summary": "Atacar não faz a criatura virar.",
+    "sections": [
+      [
+        "Vantagem",
+        "Uma criatura com Vigilância pode atacar e continuar desvirada, podendo ficar disponível para bloquear no turno do oponente."
+      ],
+      [
+        "No combate",
+        "Não altera como dano ou bloqueios funcionam. Se bloquear, combate normalmente."
+      ]
+    ]
+  },
+  {
+    "name": "Vínculo com a Vida",
+    "english": "Lifelink",
+    "summary": "O dano causado pela fonte com Vínculo com a Vida também faz seu controlador ganhar aquela quantidade de vida.",
+    "sections": [
+      [
+        "Exemplo",
+        "Se uma 5/5 causar 5 de dano, você ganha 5 de vida."
+      ],
+      [
+        "Contra bloqueadores",
+        "Você ganha vida pelo dano realmente causado. Uma 5/5 bloqueada por uma 2/2 pode atribuir os 5 de dano à 2/2 e ganhar 5 de vida; sem Atropelar, o excedente não atinge o jogador. Contra duas 2/2, pode atribuir 2 a uma e 3 à outra, ganhando 5 se todo o dano acontecer."
+      ],
+      [
+        "Ao bloquear",
+        "Se sua criatura com Vínculo com a Vida causar dano à criatura atacante, você ganha vida pela quantidade causada."
+      ]
+    ]
+  },
+  {
+    "name": "Voar",
+    "english": "Flying",
+    "summary": "A criatura só pode ser bloqueada por criaturas com Voar ou Alcance.",
+    "sections": [
+      [
+        "Ao atacar",
+        "Uma criatura sem Voar ou Alcance não pode bloqueá-la."
+      ],
+      [
+        "Ao bloquear",
+        "Uma criatura com Voar pode bloquear criaturas voadoras e não voadoras. Voar não impede que ela seja bloqueada por outra criatura voadora ou com Alcance."
+      ]
+    ]
+  },
+  {
+    "name": "Alcance",
+    "english": "Reach",
+    "summary": "A criatura pode bloquear criaturas com Voar.",
+    "sections": [
+      [
+        "Ao bloquear",
+        "Alcance permite bloquear uma criatura voadora; não é necessário que a criatura com Alcance também tenha Voar."
+      ],
+      [
+        "Ao atacar",
+        "Alcance não muda quem pode bloquear esta criatura."
+      ]
+    ]
+  },
+  {
+    "name": "Ameaçar",
+    "english": "Menace",
+    "summary": "A criatura atacante não pode ser bloqueada, exceto por duas ou mais criaturas.",
+    "sections": [
+      [
+        "Ao atacar",
+        "Um único bloqueador não é suficiente. Se vários bloqueadores forem declarados e um sair do combate depois, a criatura continua bloqueada."
+      ],
+      [
+        "Ao bloquear",
+        "Ameaçar não impõe restrições: a criatura pode bloquear normalmente."
+      ]
+    ]
+  },
+  {
+    "name": "Ímpeto",
+    "english": "Haste",
+    "summary": "A criatura pode atacar e ativar habilidades com {T} ou {Q} mesmo que não esteja sob seu controle desde o início do turno mais recente.",
+    "sections": [
+      [
+        "No turno em que entra",
+        "Pode atacar imediatamente e usar habilidades ativadas que tenham {T} ou {Q} no custo."
+      ],
+      [
+        "No combate",
+        "Ímpeto não altera bloqueios nem dano."
+      ]
+    ]
+  },
+  {
+    "name": "Indestrutível",
+    "english": "Indestructible",
+    "summary": "A permanente não pode ser destruída por dano letal ou por efeitos que dizem para destruí-la.",
+    "sections": [
+      [
+        "No combate",
+        "Dano letal é marcado normalmente, mas não destrói a criatura. Ela ainda pode causar e receber dano."
+      ],
+      [
+        "Limites",
+        "Indestrutível não impede sacrifício, exílio ou que a resistência chegue a 0 ou menos. Esses efeitos podem removê-la."
+      ]
+    ]
+  },
+  {
+    "name": "Resistência à Magia",
+    "english": "Hexproof",
+    "summary": "Seus oponentes não podem escolher esta permanente como alvo de mágicas ou habilidades que controlam.",
+    "sections": [
+      [
+        "Proteção contra alvos",
+        "Resistência à Magia impede que o oponente escolha a criatura como alvo; não impede mágicas e habilidades que não usam a palavra alvo."
+      ],
+      [
+        "No combate",
+        "Não altera ataque, bloqueio ou dano."
+      ]
+    ]
+  },
+  {
+    "name": "Manto",
+    "english": "Shroud",
+    "summary": "Esta permanente não pode ser alvo de mágicas ou habilidades de nenhum jogador, inclusive de seu controlador.",
+    "sections": [
+      [
+        "Exemplo",
+        "Você não pode escolher uma criatura com Manto como alvo de uma Aura sua."
+      ],
+      [
+        "No combate",
+        "Manto não altera ataque, bloqueio ou dano. A criatura pode bloquear normalmente, mas não fica protegida de dano de combate."
+      ]
+    ]
+  },
+  {
+    "name": "Proteção contra [cor]",
+    "english": "Protection from [Color]",
+    "summary": "Proteção contra uma qualidade segue DEBT: não pode ser alvo, encantada/equipada, bloqueada ou receber dano de fontes com essa qualidade.",
+    "sections": [
+      [
+        "Exemplo",
+        "Uma criatura com Proteção contra Vermelho não pode ser bloqueada por criaturas vermelhas, não pode ser alvo de fontes vermelhas e previne o dano que fontes vermelhas causariam a ela."
+      ],
+      [
+        "Contra vários bloqueadores",
+        "Criaturas com a qualidade protegida não podem ser declaradas como bloqueadoras; as demais podem bloquear normalmente."
+      ],
+      [
+        "Ao bloquear",
+        "Se bloquear uma criatura da qualidade protegida, o dano que essa fonte causaria à criatura protegida é prevenido."
+      ],
+      [
+        "Importante",
+        "Proteção é mais ampla que Resistência à Magia: também afeta bloqueios, dano e Auras/Equipamentos com a qualidade protegida."
+      ]
+    ]
+  },
+  {
+    "name": "Ward",
+    "english": "Ward",
+    "summary": "Quando um oponente escolhe a permanente como alvo, a habilidade Ward exige que ele pague seu custo ou a mágica/habilidade que a está mirando é anulada.",
+    "sections": [
+      [
+        "Exemplo",
+        "Com Ward {2}, quando um oponente a escolhe como alvo, ele precisa pagar {2} quando a habilidade desencadeada de Ward resolver ou a mágica/habilidade será anulada."
+      ],
+      [
+        "No combate",
+        "Ward não altera ataque, bloqueio ou dano."
+      ]
+    ]
+  },
+  {
+    "name": "Proteção contra [característica]",
+    "english": "Protection from [Quality]",
+    "summary": "É a mesma habilidade de Proteção, aplicada à qualidade indicada, que pode ser uma cor, tipo ou outra característica.",
+    "sections": [
+      [
+        "Exemplo",
+        "Proteção contra criaturas pretas impede que criaturas pretas bloqueiem esta criatura, causem dano a ela ou a escolham como alvo."
+      ],
+      [
+        "No combate",
+        "Bloqueadores que tenham a qualidade protegida não podem ser declarados. Se esta criatura bloquear uma fonte com essa qualidade, o dano dessa fonte é prevenido."
+      ],
+      [
+        "Importante",
+        "Proteção não significa apenas que a permanente não pode ser alvo; seus outros efeitos dependem da qualidade especificada."
+      ]
+    ]
+  },
+  {
+    "name": "Defender",
+    "english": "Defender",
+    "summary": "A criatura não pode atacar.",
+    "sections": [
+      [
+        "Exemplo",
+        "Uma 0/6 com Defender pode proteger você, mas não pode ser declarada como atacante."
+      ],
+      [
+        "Ao bloquear",
+        "Defender não impede a criatura de bloquear; essa é uma de suas funções comuns."
+      ]
+    ]
+  },
+  {
+    "name": "Travessia de Ilha",
+    "english": "Islandwalk",
+    "summary": "A criatura não pode ser bloqueada enquanto o jogador defensor controlar uma Ilha.",
+    "sections": [
+      [
+        "Exemplo",
+        "Se o oponente defensor controla uma Ilha, uma criatura com Travessia de Ilha não pode ser bloqueada."
+      ],
+      [
+        "Ao bloquear",
+        "Travessia de Ilha não oferece vantagem defensiva."
+      ],
+      [
+        "Variantes",
+        "Existem habilidades semelhantes para outros terrenos, como Pântano, Montanha, Floresta e Planície."
+      ]
+    ]
+  },
+  {
+    "name": "Sombra",
+    "english": "Shadow",
+    "summary": "Uma criatura com Sombra só pode bloquear e ser bloqueada por criaturas com Sombra.",
+    "sections": [
+      [
+        "Ao atacar",
+        "Só criaturas com Sombra podem bloqueá-la."
+      ],
+      [
+        "Ao bloquear",
+        "Só pode bloquear uma criatura com Sombra; não pode bloquear uma criatura sem Sombra."
+      ]
+    ]
+  },
+  {
+    "name": "Intimidar",
+    "english": "Intimidate",
+    "summary": "Habilidade antiga de evasão: esta criatura só pode ser bloqueada por criaturas artefato ou por criaturas que compartilhem uma cor com ela.",
+    "sections": [
+      [
+        "Ao atacar",
+        "Cada bloqueador precisa ser uma criatura artefato ou compartilhar pelo menos uma cor com a criatura atacante."
+      ],
+      [
+        "Ao bloquear",
+        "Intimidar não restringe quais criaturas ela pode bloquear."
+      ],
+      [
+        "Nota",
+        "É uma habilidade antiga e não costuma aparecer em cartas novas."
+      ]
+    ]
+  },
+  {
+    "name": "Medo",
+    "english": "Fear",
+    "summary": "Habilidade antiga de evasão: esta criatura só pode ser bloqueada por criaturas pretas ou criaturas artefato.",
+    "sections": [
+      [
+        "Ao atacar",
+        "Cada bloqueador precisa ser preto ou artefato."
+      ],
+      [
+        "Ao bloquear",
+        "Medo não restringe quais criaturas ela pode bloquear."
+      ],
+      [
+        "Nota",
+        "É uma habilidade antiga e não costuma aparecer em cartas novas."
+      ]
+    ]
+  },
+  {
+    "name": "Prowess",
+    "english": "Prowess",
+    "summary": "Sempre que você conjura uma mágica que não seja de criatura, esta criatura recebe +1/+1 até o final do turno.",
+    "sections": [
+      [
+        "Exemplo",
+        "Uma 2/2 com Prowess recebe +1/+1 quando você conjura uma mágica instantânea e fica 3/3 até o final do turno."
+      ],
+      [
+        "No combate",
+        "O bônus vale enquanto durar o turno e aumenta o poder e a resistência durante o combate. Pode ser útil antes ou durante o combate, se resolver a tempo."
+      ]
+    ]
+  },
+  {
+    "name": "Bushido",
+    "english": "Bushido",
+    "summary": "Quando esta criatura bloqueia ou se torna bloqueada, recebe +X/+X até o final do turno, sendo X o valor de Bushido.",
+    "sections": [
+      [
+        "Exemplo",
+        "Uma 2/2 com Bushido 2 recebe +2/+2 e fica 4/4 quando bloqueia ou se torna bloqueada."
+      ],
+      [
+        "Contra vários bloqueadores",
+        "Bushido desencadeia uma vez quando a criatura se torna bloqueada, mesmo que vários bloqueadores sejam declarados ao mesmo tempo."
+      ],
+      [
+        "Ao bloquear",
+        "Também recebe o bônus quando bloqueia uma criatura."
+      ]
+    ]
+  },
+  {
+    "name": "Exalted",
+    "english": "Exalted",
+    "summary": "Quando uma criatura que você controla ataca sozinha, ela recebe +1/+1 até o final do turno para cada permanente com Exalted que você controla.",
+    "sections": [
+      [
+        "Exemplo",
+        "Com duas permanentes com Exalted, uma 3/3 que ataca sozinha recebe +2/+2 e fica 5/5 até o final do turno."
+      ],
+      [
+        "No combate",
+        "O bônus permanece durante o combate, inclusive se a criatura for bloqueada por várias criaturas."
+      ],
+      [
+        "Ao bloquear",
+        "Exalted não ajuda quando você está bloqueando; ele desencadeia quando você ataca com uma única criatura."
+      ]
+    ]
+  },
+  {
+    "name": "Persist",
+    "english": "Persist",
+    "summary": "Quando esta criatura morre, se ela não tinha um marcador -1/-1, retorna ao campo de batalha sob o controle de seu dono com um marcador -1/-1.",
+    "sections": [
+      [
+        "Exemplo",
+        "Uma 3/3 sem marcador -1/-1 morre e retorna como 2/2 com um marcador -1/-1."
+      ],
+      [
+        "No combate",
+        "Se morrer em combate e cumprir a condição do marcador, Persist desencadeia e pode devolvê-la ao campo de batalha."
+      ]
+    ]
+  },
+  {
+    "name": "Undying",
+    "english": "Undying",
+    "summary": "Quando esta criatura morre, se ela não tinha um marcador +1/+1, retorna ao campo de batalha sob o controle de seu dono com um marcador +1/+1.",
+    "sections": [
+      [
+        "Exemplo",
+        "Uma 2/2 sem marcador +1/+1 morre e retorna como 3/3 com um marcador +1/+1."
+      ],
+      [
+        "No combate",
+        "Se morrer em combate e cumprir a condição do marcador, Undying desencadeia e pode devolvê-la ao campo de batalha."
+      ]
+    ]
+  }
+]

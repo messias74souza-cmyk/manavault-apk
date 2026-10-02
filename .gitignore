@@ -1,0 +1,11 @@
+# Personal data and local Python/Android build outputs
+magic_data.json
+magic_data.backup.json
+mana_vault_errors.log
+.venv/
+__pycache__/
+.pytest_cache/
+build/
+dist/
+android_app/.buildozer/
+android_app/bin/
