@@ -39,11 +39,13 @@ from data_store import (
     fetch_scryfall_card_info,
     filter_matches,
     find_card_defaults,
+    find_card_in_catalog_or_decks,
     format_decklist,
     identify_card_from_photo,
     normalize_keyword_search,
     normalize_tags,
     parse_decklist_text,
+    search_card_database,
 )
 
 try:
@@ -743,10 +745,15 @@ class AddCardsScreen(ManaVaultScreen):
 
         name_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
         self.name_input = make_input("Nome da carta (ex: Lightning Bolt, Raio...)")
-        self.name_input.bind(focus=self.on_name_focus_changed)
+        self.name_input.bind(focus=self.on_name_focus_changed, text=self.on_name_text_changed)
         name_row.add_widget(self.name_input)
         name_row.add_widget(make_button("🔍  Buscar", self.try_autofill, color=COLOR_SURFACE_2, height=46, font_size=12))
         c2.add_widget(name_row)
+
+        # Barra de Sugestões Rápidas (Catálogo Offline)
+        self.suggestions_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
+        self.suggestions_box.bind(minimum_height=self.suggestions_box.setter("height"))
+        c2.add_widget(self.suggestions_box)
 
         c2.add_widget(make_label("Tipo de Carta:", height=18, font_size=12, color=COLOR_TEXT_MUTED))
         self.type_spinner = make_spinner("Criatura", CARD_TYPES)
@@ -829,7 +836,7 @@ class AddCardsScreen(ManaVaultScreen):
                         self.feedback_label.text = "Permissão de câmera é necessária para fotografar a carta."
                         self.feedback_label.color = COLOR_DANGER
 
-                request_permissions([Permission.CAMERA], on_perm)
+                request_permissions([Permission.CAMERA, Permission.READ_EXTERNAL_STORAGE], on_perm)
             except Exception:
                 self._launch_android_camera()
         else:
@@ -837,7 +844,7 @@ class AddCardsScreen(ManaVaultScreen):
 
     def _launch_android_camera(self):
         try:
-            from jnius import autoclass
+            from jnius import autoclass, cast
             from android import activity
 
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
@@ -847,16 +854,22 @@ class AddCardsScreen(ManaVaultScreen):
             Intent = autoclass("android.content.Intent")
             MediaStore = autoclass("android.provider.MediaStore")
 
-            values = ContentValues()
-            values.put(MediaStoreImagesMedia.TITLE, f"ManaVault_card_{int(time.time())}")
-            values.put(MediaStoreImagesMedia.MIME_TYPE, "image/jpeg")
-
-            content_resolver = currentActivity.getContentResolver()
-            self._pending_camera_uri = content_resolver.insert(MediaStoreImagesMedia.EXTERNAL_CONTENT_URI, values)
-
             intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-            intent.putExtra(MediaStore.EXTRA_OUTPUT, self._pending_camera_uri)
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            self._pending_camera_uri = None
+
+            try:
+                values = ContentValues()
+                values.put(MediaStoreImagesMedia.TITLE, f"ManaVault_card_{int(time.time())}")
+                values.put(MediaStoreImagesMedia.MIME_TYPE, "image/jpeg")
+
+                content_resolver = currentActivity.getContentResolver()
+                self._pending_camera_uri = content_resolver.insert(MediaStoreImagesMedia.EXTERNAL_CONTENT_URI, values)
+                if self._pending_camera_uri is not None:
+                    parcelable_uri = cast("android.os.Parcelable", self._pending_camera_uri)
+                    intent.putExtra(MediaStore.EXTRA_OUTPUT, parcelable_uri)
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            except Exception:
+                pass
 
             activity.bind(on_activity_result=self._on_camera_activity_result)
             currentActivity.startActivityForResult(intent, 0xCA01)
@@ -874,16 +887,40 @@ class AddCardsScreen(ManaVaultScreen):
 
             if result_code == -1:  # Activity.RESULT_OK
                 pending_uri = getattr(self, "_pending_camera_uri", None)
+                private_file = None
                 if pending_uri and SharedStorage is not None:
                     try:
                         private_file = SharedStorage().copy_from_shared(pending_uri.toString())
-                        if private_file:
-                            Clock.schedule_once(lambda dt: self._on_photo_ready(private_file), 0)
-                            return
-                    except Exception as e:
-                        Clock.schedule_once(lambda dt: self.app_ref.set_status(f"Erro ao obter foto: {e}"), 0)
+                    except Exception:
+                        private_file = None
+
+                # Fallback: Se não conseguiu copiar do Uri, tenta ler bitmap retornado direto da Intent
+                if (not private_file or not Path(private_file).exists() or Path(private_file).stat().st_size == 0) and data is not None:
+                    try:
+                        from jnius import autoclass
+                        extras = data.getExtras()
+                        if extras is not None:
+                            bitmap = extras.get("data")
+                            if bitmap is not None:
+                                dest_dir = self.app_ref.images_dir
+                                dest_dir.mkdir(parents=True, exist_ok=True)
+                                thumb_path = dest_dir / f"card_cam_{int(time.time() * 1000)}.jpg"
+                                FileOutputStream = autoclass("java.io.FileOutputStream")
+                                CompressFormat = autoclass("android.graphics.Bitmap$CompressFormat")
+                                fos = FileOutputStream(str(thumb_path))
+                                bitmap.compress(CompressFormat.JPEG, 92, fos)
+                                fos.flush()
+                                fos.close()
+                                private_file = str(thumb_path)
+                    except Exception:
+                        pass
+
+                if private_file and Path(private_file).exists() and Path(private_file).stat().st_size > 0:
+                    Clock.schedule_once(lambda dt: self._on_photo_ready(private_file), 0)
+                else:
+                    Clock.schedule_once(lambda dt: self.app_ref.set_status("Foto capturada, mas não foi possível ler a imagem."), 0)
             else:
-                # Cancelado: remove o registro vazio gerado no MediaStore
+                # Cancelado: remove o registro vazio gerado no MediaStore se houver
                 pending_uri = getattr(self, "_pending_camera_uri", None)
                 if pending_uri:
                     try:
@@ -944,7 +981,7 @@ class AddCardsScreen(ManaVaultScreen):
             self.feedback_label.color = COLOR_DANGER
 
     def scan_current_photo(self, *_):
-        """Analisa a foto anexada à carta e busca os dados oficiais no Scryfall em segundo plano."""
+        """Analisa a foto anexada à carta e busca os dados oficiais no catálogo offline ou Scryfall."""
         photo_path = self.current_image_uri
         if not photo_path or not Path(photo_path).is_file():
             self.feedback_label.text = "Tire uma foto ou escolha da galeria primeiro para identificar."
@@ -956,45 +993,52 @@ class AddCardsScreen(ManaVaultScreen):
 
         def worker():
             gemini_key = self.app_ref.get_gemini_key()
-            card_info, best_text = identify_card_from_photo(photo_path, gemini_api_key=gemini_key)
+            decks = self.app_ref.store.data.get("decks", {})
+            card_info, best_text = identify_card_from_photo(photo_path, gemini_api_key=gemini_key, decks=decks)
             Clock.schedule_once(lambda dt: self._on_card_identified(card_info, best_text), 0)
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_card_identified(self, card_info, best_text):
         """Preenche automaticamente os campos da carta reconhecida."""
-        if card_info:
-            card_name = card_info.get("name", "")
-            printed_name = card_info.get("printed_name", "")
+        self._suppress_suggestions = True
+        try:
+            if card_info:
+                card_name = card_info.get("name", "")
+                printed_name = card_info.get("printed_name", "")
 
-            self.name_input.text = card_name
-            self.cmc_input.text = str(card_info.get("cmc", 0))
-            self.custom_color_input.text = card_info.get("color", "C")
+                self.name_input.text = card_name
+                self.cmc_input.text = str(card_info.get("cmc", 0))
+                self.custom_color_input.text = card_info.get("color", "C")
 
-            matched_opt = None
-            for opt_text, opt_code in COLOR_OPTIONS_MAP.items():
-                if opt_code == card_info.get("color"):
-                    matched_opt = opt_text
-                    break
-            if matched_opt:
-                self.color_spinner.text = matched_opt
+                matched_opt = None
+                for opt_text, opt_code in COLOR_OPTIONS_MAP.items():
+                    if opt_code == card_info.get("color"):
+                        matched_opt = opt_text
+                        break
+                if matched_opt:
+                    self.color_spinner.text = matched_opt
+                else:
+                    self.color_spinner.text = "Multicolorida (Duas ou mais cores)"
+
+                card_type = card_info.get("type", "Outros")
+                if card_type in CARD_TYPES:
+                    self.type_spinner.text = card_type
+
+                self.suggestions_box.clear_widgets()
+                display_title = f"{card_name} ({printed_name})" if printed_name and printed_name != card_name else card_name
+                self.feedback_label.text = f"✓ Carta identificada: {display_title}! Atributos preenchidos."
+                self.feedback_label.color = COLOR_SUCCESS
+            elif best_text:
+                self.name_input.text = best_text
+                self.suggestions_box.clear_widgets()
+                self.feedback_label.text = f"Texto lido: '{best_text}'. Verifique ou toque em Buscar."
+                self.feedback_label.color = COLOR_WARNING
             else:
-                self.color_spinner.text = "Multicolorida (Duas ou mais cores)"
-
-            card_type = card_info.get("type", "Outros")
-            if card_type in CARD_TYPES:
-                self.type_spinner.text = card_type
-
-            display_title = f"{card_name} ({printed_name})" if printed_name and printed_name != card_name else card_name
-            self.feedback_label.text = f"✓ Carta identificada: {display_title}! Atributos preenchidos."
-            self.feedback_label.color = COLOR_SUCCESS
-        elif best_text:
-            self.name_input.text = best_text
-            self.feedback_label.text = f"Texto lido: '{best_text}'. Verifique ou toque em Buscar."
-            self.feedback_label.color = COLOR_WARNING
-        else:
-            self.feedback_label.text = "Não foi possível ler a carta na foto. Tente uma foto mais nítida com boa iluminação."
-            self.feedback_label.color = COLOR_WARNING
+                self.feedback_label.text = "Não foi possível ler a carta na foto. Tente uma foto mais nítida com boa iluminação."
+                self.feedback_label.color = COLOR_WARNING
+        finally:
+            self._suppress_suggestions = False
 
     def show_ai_settings_dialog(self, *_):
         """Exibe popup para o usuário configurar opcionalmente a chave do Gemini Vision."""
@@ -1054,35 +1098,41 @@ class AddCardsScreen(ManaVaultScreen):
 
     def _on_scryfall_result(self, info):
         if not info:
-            self.feedback_label.text = "Carta não encontrada na Scryfall. Verifique o nome."
+            self.feedback_label.text = "Carta não encontrada no catálogo nem na Scryfall. Preencha manualmente."
             self.feedback_label.color = COLOR_WARNING
             return
 
-        self.name_input.text = info["name"]
-        self.cmc_input.text = str(info["cmc"])
-        self.custom_color_input.text = info["color"]
+        self._suppress_suggestions = True
+        try:
+            self.name_input.text = info["name"]
+            self.cmc_input.text = str(info["cmc"])
+            self.custom_color_input.text = info["color"]
 
-        matched_opt = None
-        for opt_text, opt_code in COLOR_OPTIONS_MAP.items():
-            if opt_code == info["color"]:
-                matched_opt = opt_text
-                break
-        if matched_opt:
-            self.color_spinner.text = matched_opt
-        else:
-            self.color_spinner.text = "Multicolorida (Duas ou mais cores)"
+            matched_opt = None
+            for opt_text, opt_code in COLOR_OPTIONS_MAP.items():
+                if opt_code == info["color"]:
+                    matched_opt = opt_text
+                    break
+            if matched_opt:
+                self.color_spinner.text = matched_opt
+            else:
+                self.color_spinner.text = "Multicolorida (Duas ou mais cores)"
 
-        if info["type"] in CARD_TYPES:
-            self.type_spinner.text = info["type"]
+            if info["type"] in CARD_TYPES:
+                self.type_spinner.text = info["type"]
 
-        img_url = info.get("image_url", "")
-        if img_url:
-            self.set_card_image(img_url)
-            self.feedback_label.text = "✓ Dados e arte oficial carregados da Scryfall!"
-            self.feedback_label.color = COLOR_SUCCESS
-        else:
-            self.feedback_label.text = "✓ Dados carregados (sem imagem disponível)."
-            self.feedback_label.color = COLOR_SUCCESS
+            img_url = info.get("image_url", "")
+            if img_url:
+                self.set_card_image(img_url)
+                self.feedback_label.text = "✓ Dados e arte oficial carregados!"
+                self.feedback_label.color = COLOR_SUCCESS
+            else:
+                self.feedback_label.text = "✓ Dados carregados do catálogo!"
+                self.feedback_label.color = COLOR_SUCCESS
+
+            self.suggestions_box.clear_widgets()
+        finally:
+            self._suppress_suggestions = False
 
     def adjust_input_number(self, target_input, delta, min_val=1):
         try:
@@ -1100,6 +1150,80 @@ class AddCardsScreen(ManaVaultScreen):
             if self.custom_color_input.text in ("C", "W", "U", "B", "R", "G"):
                 self.custom_color_input.text = "UR"
 
+    def on_name_text_changed(self, instance, text):
+        """Disparado enquanto o usuário digita: exibe sugestões instantâneas do catálogo offline e decks."""
+        if getattr(self, "_suppress_suggestions", False):
+            return
+        query = str(text or "").strip()
+        self.suggestions_box.clear_widgets()
+        if len(query) < 2:
+            return
+
+        decks = self.app_ref.store.data.get("decks", {})
+        matches = search_card_database(query, decks=decks, limit=5)
+        if not matches:
+            return
+
+        for card_data in matches:
+            c_name = card_data.get("name", "")
+            c_alt = card_data.get("alt_name", "")
+            c_type = card_data.get("type", "Outros")
+            c_cmc = card_data.get("cmc", 0)
+            c_col = card_data.get("color", "C")
+
+            label = f"✨ {c_name}"
+            if c_alt and c_alt != c_name:
+                label += f" ({c_alt})"
+            label += f"  ·  {c_type}  ·  CMC {c_cmc}  ·  {c_col}"
+
+            btn = make_button(
+                label,
+                partial(self.select_suggested_card, card_data),
+                color=COLOR_SURFACE_2,
+                text_color=COLOR_TEXT_PRIMARY,
+                height=34,
+                font_size=11,
+                radius=6,
+            )
+            self.suggestions_box.add_widget(btn)
+
+    def select_suggested_card(self, card_data, *_):
+        """Ao tocar numa sugestão, preenche imediatamente os atributos da carta a partir do catálogo."""
+        self._suppress_suggestions = True
+        try:
+            name = card_data.get("name", "")
+            alt = card_data.get("alt_name", "")
+            self.name_input.text = name
+            self.cmc_input.text = str(card_data.get("cmc", 0))
+            color_code = str(card_data.get("color", "C"))
+            self.custom_color_input.text = color_code
+
+            matched_opt = None
+            for opt_text, opt_code in COLOR_OPTIONS_MAP.items():
+                if opt_code == color_code:
+                    matched_opt = opt_text
+                    break
+            if matched_opt:
+                self.color_spinner.text = matched_opt
+            else:
+                self.color_spinner.text = "Multicolorida (Duas ou mais cores)"
+
+            c_type = str(card_data.get("type", "Criatura"))
+            if c_type in CARD_TYPES:
+                self.type_spinner.text = c_type
+
+            img = card_data.get("image_url", card_data.get("image_uri", ""))
+            if img and not self.current_image_uri:
+                self.set_card_image(img)
+
+            self.suggestions_box.clear_widgets()
+
+            display_name = f"{name} ({alt})" if alt and alt != name else name
+            self.feedback_label.text = f"✓ Carta '{display_name}' selecionada do catálogo offline!"
+            self.feedback_label.color = COLOR_SUCCESS
+        finally:
+            self._suppress_suggestions = False
+
     def on_name_focus_changed(self, instance, focused):
         if not focused:
             self.try_autofill()
@@ -1108,37 +1232,44 @@ class AddCardsScreen(ManaVaultScreen):
         card_name = self.name_input.text.strip()
         if not card_name:
             return
+        self.suggestions_box.clear_widgets()
         decks = self.app_ref.store.data.get("decks", {})
         found = find_card_defaults(decks, card_name)
         if found:
-            self.cmc_input.text = str(found.get("cmc", 0))
-            raw_color = str(found.get("color", "C")).upper()
-            self.custom_color_input.text = raw_color
+            self._suppress_suggestions = True
+            try:
+                found_name = found.get("name", card_name)
+                self.name_input.text = found_name
+                self.cmc_input.text = str(found.get("cmc", 0))
+                raw_color = str(found.get("color", "C")).upper()
+                self.custom_color_input.text = raw_color
 
-            matched_opt = None
-            for opt_text, opt_code in COLOR_OPTIONS_MAP.items():
-                if opt_code == raw_color:
-                    matched_opt = opt_text
-                    break
-            if matched_opt:
-                self.color_spinner.text = matched_opt
-            else:
-                self.color_spinner.text = "Multicolorida (Duas ou mais cores)"
+                matched_opt = None
+                for opt_text, opt_code in COLOR_OPTIONS_MAP.items():
+                    if opt_code == raw_color:
+                        matched_opt = opt_text
+                        break
+                if matched_opt:
+                    self.color_spinner.text = matched_opt
+                else:
+                    self.color_spinner.text = "Multicolorida (Duas ou mais cores)"
 
-            card_type = str(found.get("type", "Criatura"))
-            if card_type in CARD_TYPES:
-                self.type_spinner.text = card_type
-            if not self.desc_input.text.strip():
-                self.desc_input.text = str(found.get("description", ""))
+                card_type = str(found.get("type", "Criatura"))
+                if card_type in CARD_TYPES:
+                    self.type_spinner.text = card_type
+                if not self.desc_input.text.strip():
+                    self.desc_input.text = str(found.get("description", ""))
 
-            existing_img = found.get("image_uri", "")
-            if existing_img and not self.current_image_uri:
-                self.set_card_image(existing_img)
+                existing_img = found.get("image_uri", "")
+                if existing_img and not self.current_image_uri:
+                    self.set_card_image(existing_img)
 
-            self.feedback_label.text = f"✓ Dados recuperados do histórico para '{card_name}'."
-            self.feedback_label.color = COLOR_SUCCESS
+                self.feedback_label.text = f"✓ Dados recuperados do catálogo para '{found_name}'."
+                self.feedback_label.color = COLOR_SUCCESS
+            finally:
+                self._suppress_suggestions = False
         else:
-            # If not in local history, query Scryfall automatically
+            # Se não estiver no catálogo offline nem decks locais, tenta Scryfall online
             self.fetch_official_art()
 
     def save_card(self, *_):
@@ -1188,10 +1319,15 @@ class AddCardsScreen(ManaVaultScreen):
         sec_label = "Sideboard" if section_key == "side" else "Mainboard"
         self.app_ref.record_change(f"Carta salva: {card_name} ({qty} cópias) com foto no {sec_label} de {deck_name}")
         if self.app_ref.save_data():
-            self.name_input.text = ""
-            self.desc_input.text = ""
-            self.qty_input.text = "1"
-            self.set_card_image("")
+            self._suppress_suggestions = True
+            try:
+                self.name_input.text = ""
+                self.desc_input.text = ""
+                self.qty_input.text = "1"
+                self.set_card_image("")
+                self.suggestions_box.clear_widgets()
+            finally:
+                self._suppress_suggestions = False
             self.feedback_label.text = f"✓ '{card_name}' ({qty}x) salva com sucesso no {sec_label}!"
             self.feedback_label.color = COLOR_SUCCESS
             self.app_ref.set_status(f"Carta '{card_name}' salva.")

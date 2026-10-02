@@ -9,3 +9,5 @@ build/
 dist/
 android_app/.buildozer/
 android_app/bin/
+dist_apk/
+*.zip

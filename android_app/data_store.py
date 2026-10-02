@@ -216,42 +216,141 @@ def format_decklist(deck_name, deck):
     return "\n".join(lines) + "\n"
 
 
-def find_card_defaults(decks, card_name):
-    """Busca em todos os decks cadastrados se a carta já existe para preencher tipo, CMC e Cor."""
-    typed_name = normalize_keyword_search(card_name).strip()
-    if not typed_name or not isinstance(decks, dict):
-        return None
+CATALOG_PATH = Path(__file__).resolve().parent / "card_catalog.json"
+_CACHED_CATALOG = None
 
-    for d_name, d_content in decks.items():
-        for section in ("main", "side"):
-            for c_name, c_info in d_content.get(section, {}).items():
-                if normalize_keyword_search(c_name) == typed_name:
+
+def _get_ssl_context():
+    """Gera contexto SSL permissivo para evitar falhas de certificado no Android."""
+    import ssl
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+    except Exception:
+        try:
+            return ssl._create_unverified_context()
+        except Exception:
+            return None
+
+
+def get_card_catalog():
+    """Retorna o catálogo embutido de cartas (carregado em memória na primeira chamada)."""
+    global _CACHED_CATALOG
+    if _CACHED_CATALOG is None:
+        try:
+            if CATALOG_PATH.is_file():
+                _CACHED_CATALOG = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+            else:
+                _CACHED_CATALOG = {}
+        except Exception:
+            _CACHED_CATALOG = {}
+    return _CACHED_CATALOG
+
+
+def search_card_database(query, decks=None, limit=6):
+    """Busca cartas no catálogo offline e nos decks cadastrados (retorna sugestões instantâneas)."""
+    q_norm = normalize_keyword_search(query).strip()
+    if not q_norm:
+        return []
+
+    catalog = get_card_catalog()
+    exact = []
+    starts = []
+    contains = []
+
+    # 1. Catálogo offline embutido
+    for k, info in catalog.items():
+        name = info.get("name", "")
+        alt = info.get("alt_name", "")
+        k_norm = normalize_keyword_search(k)
+        alt_norm = normalize_keyword_search(alt)
+
+        if k_norm == q_norm or (alt_norm and alt_norm == q_norm):
+            exact.append(info)
+        elif k_norm.startswith(q_norm) or (alt_norm and alt_norm.startswith(q_norm)):
+            starts.append(info)
+        elif q_norm in k_norm or (alt_norm and q_norm in alt_norm):
+            contains.append(info)
+
+    # 2. Decks cadastrados pelo usuário
+    if isinstance(decks, dict):
+        for d_name, d_content in decks.items():
+            if not isinstance(d_content, dict):
+                continue
+            for sec in ("main", "side"):
+                for c_name, c_info in d_content.get(sec, {}).items():
+                    c_norm = normalize_keyword_search(c_name)
                     if isinstance(c_info, dict):
-                        return {
+                        card_obj = {
+                            "name": c_name,
+                            "alt_name": "",
                             "cmc": int(c_info.get("cmc", 0) or 0),
                             "color": str(c_info.get("color", "C")),
                             "type": str(c_info.get("type", "Outros")),
-                            "description": str(c_info.get("description", "")),
-                            "image_uri": str(c_info.get("image_uri", "")),
+                            "image_url": str(c_info.get("image_uri", "")),
                         }
+                    else:
+                        card_obj = {"name": c_name, "alt_name": "", "cmc": 0, "color": "C", "type": "Outros", "image_url": ""}
+                    if c_norm == q_norm:
+                        exact.append(card_obj)
+                    elif c_norm.startswith(q_norm):
+                        starts.append(card_obj)
+                    elif q_norm in c_norm:
+                        contains.append(card_obj)
+
+    results = exact + starts + contains
+    seen = set()
+    dedup = []
+    for r in results:
+        r_name = str(r.get("name", "")).strip()
+        if r_name and r_name.lower() not in seen:
+            seen.add(r_name.lower())
+            dedup.append(r)
+        if len(dedup) >= limit:
+            break
+    return dedup
+
+
+def find_card_in_catalog_or_decks(card_name, decks=None):
+    """Encontra carta no catálogo offline ou nos decks por correspondência exata ou inicial."""
+    results = search_card_database(card_name, decks=decks, limit=1)
+    if results:
+        return results[0]
+    return None
+
+
+def find_card_defaults(decks, card_name):
+    """Busca no catálogo offline e em todos os decks cadastrados para preencher CMC, Cor e Tipo."""
+    found = find_card_in_catalog_or_decks(card_name, decks=decks)
+    if found:
+        return {
+            "name": found.get("name", card_name),
+            "cmc": int(found.get("cmc", 0)),
+            "color": str(found.get("color", "C")),
+            "type": str(found.get("type", "Outros")),
+            "description": str(found.get("description", "")),
+            "image_uri": str(found.get("image_url", found.get("image_uri", ""))),
+        }
     return None
 
 
 def map_scryfall_type(type_line):
     tl = (type_line or "").lower()
-    if "creature" in tl:
+    if "creature" in tl or "criatura" in tl:
         return "Criatura"
-    if "instant" in tl:
+    if "instant" in tl or "instantânea" in tl:
         return "Mágica Instantânea"
-    if "sorcery" in tl:
+    if "sorcery" in tl or "feitiço" in tl:
         return "Feitiço"
-    if "enchantment" in tl:
+    if "enchantment" in tl or "encantamento" in tl:
         return "Encantamento"
-    if "artifact" in tl:
+    if "artifact" in tl or "artefato" in tl:
         return "Artefato"
     if "planeswalker" in tl:
         return "Planeswalker"
-    if "land" in tl:
+    if "land" in tl or "terreno" in tl:
         return "Terreno"
     return "Outros"
 
@@ -278,27 +377,41 @@ def _parse_scryfall_card(data):
 
 
 def fetch_scryfall_card_info(query):
-    """Consulta os dados e imagem oficial da carta na Scryfall API (suporte a inglês e português)."""
-    import urllib.parse
-    import urllib.request
-
+    """Consulta os dados da carta (primeiro no catálogo offline, depois na Scryfall com SSL seguro)."""
     query = str(query or "").strip()
     if not query:
         return None
 
-    headers = {"User-Agent": "ManaVaultApp/1.8.0", "Accept": "application/json"}
-    
-    # 1. Tentativa de busca fuzzy direta
+    # 1. Catálogo local offline primeiro (Instantâneo e sem internet)
+    local_match = find_card_in_catalog_or_decks(query)
+    if local_match:
+        return {
+            "name": local_match.get("name", query),
+            "printed_name": local_match.get("alt_name", ""),
+            "cmc": int(local_match.get("cmc", 0)),
+            "color": str(local_match.get("color", "C")),
+            "type": str(local_match.get("type", "Outros")),
+            "image_url": str(local_match.get("image_url", "")),
+        }
+
+    # 2. Scryfall online (com SSL context compatível com Android)
+    import urllib.parse
+    import urllib.request
+
+    headers = {"User-Agent": "ManaVaultApp/1.9.0", "Accept": "application/json"}
+    ssl_ctx = _get_ssl_context()
+
+    # Tentativa fuzzy direta
     url = "https://api.scryfall.com/cards/named?fuzzy=" + urllib.parse.quote(query)
-    req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=7) as resp:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=7, context=ssl_ctx) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return _parse_scryfall_card(data)
     except Exception:
         pass
 
-    # 2. Tentativas multilíngues (inclusive cartas impressas em português)
+    # Tentativas multilíngues
     for q_pattern in [
         query,
         f'include_multilingual=true "{query}"',
@@ -307,7 +420,7 @@ def fetch_scryfall_card_info(query):
         try:
             s_url = "https://api.scryfall.com/cards/search?q=" + urllib.parse.quote(q_pattern)
             s_req = urllib.request.Request(s_url, headers=headers)
-            with urllib.request.urlopen(s_req, timeout=7) as s_resp:
+            with urllib.request.urlopen(s_req, timeout=7, context=ssl_ctx) as s_resp:
                 s_data = json.loads(s_resp.read().decode("utf-8"))
                 if s_data.get("data"):
                     return _parse_scryfall_card(s_data["data"][0])
@@ -361,7 +474,7 @@ def scale_image_for_ocr(image_path, max_dim=1200):
 
 
 def ocr_image_to_text(image_bytes):
-    """Executa OCR gratuito e rápido da imagem da carta via API OCR.space."""
+    """Executa OCR gratuito da imagem da carta via API OCR.space com SSL seguro."""
     if not image_bytes:
         return ""
     import base64
@@ -378,9 +491,10 @@ def ocr_image_to_text(image_bytes):
         "scale": "true",
     }).encode("utf-8")
 
+    ssl_ctx = _get_ssl_context()
     req = urllib.request.Request("https://api.ocr.space/parse/image", data=post_data)
     try:
-        with urllib.request.urlopen(req, timeout=18) as resp:
+        with urllib.request.urlopen(req, timeout=18, context=ssl_ctx) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             results = data.get("ParsedResults", [])
             if results:
@@ -412,13 +526,14 @@ def identify_card_with_gemini(api_key, image_bytes):
         }],
         "generationConfig": {"response_mime_type": "application/json"}
     }
+    ssl_ctx = _get_ssl_context()
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"}
     )
     try:
-        with urllib.request.urlopen(req, timeout=12) as resp:
+        with urllib.request.urlopen(req, timeout=12, context=ssl_ctx) as resp:
             res = json.loads(resp.read().decode("utf-8"))
             text = res["candidates"][0]["content"]["parts"][0]["text"]
             parsed = json.loads(text)
@@ -439,8 +554,8 @@ def identify_card_with_gemini(api_key, image_bytes):
     return None
 
 
-def identify_card_from_photo(image_path, gemini_api_key=None):
-    """Fluxo inteligente de identificação: extrai o nome da carta da foto e busca atributos no Scryfall."""
+def identify_card_from_photo(image_path, gemini_api_key=None, decks=None):
+    """Fluxo completo: extrai candidatos via OCR e consulta primeiro o catálogo offline, depois Scryfall."""
     image_bytes = scale_image_for_ocr(image_path)
     if not image_bytes:
         return None, ""
@@ -451,7 +566,7 @@ def identify_card_from_photo(image_path, gemini_api_key=None):
         if card:
             return card, card["name"]
 
-    # OCR gratuito integrado
+    # OCR integrado
     raw_text = ocr_image_to_text(image_bytes)
     if not raw_text:
         return None, ""
@@ -474,6 +589,13 @@ def identify_card_from_photo(image_path, gemini_api_key=None):
         if len(candidates) >= 6:
             break
 
+    # 1. Verifica candidatos no catálogo offline (instantâneo!)
+    for cand in candidates:
+        local_card = find_card_in_catalog_or_decks(cand, decks=decks)
+        if local_card:
+            return local_card, cand
+
+    # 2. Se não achou localmente, tenta Scryfall online
     for cand in candidates:
         card = fetch_scryfall_card_info(cand)
         if card:

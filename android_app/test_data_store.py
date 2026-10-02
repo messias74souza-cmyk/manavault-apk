@@ -213,6 +213,26 @@ class DataStoreTests(unittest.TestCase):
         self.assertEqual(parsed["type"], "Mágica Instantânea")
         self.assertEqual(parsed["image_url"], "https://cards.scryfall.io/test.jpg")
 
+    def test_offline_card_catalog_and_search(self):
+        from data_store import search_card_database, find_card_defaults
+
+        # Test offline search for Portuguese cards
+        anel = search_card_database("Anel", limit=2)
+        self.assertTrue(len(anel) > 0)
+        self.assertEqual(anel[0]["name"], "Anel Solar")
+
+        # Test offline search for user's specific cards
+        cascavel = search_card_database("cascavel", limit=2)
+        self.assertTrue(len(cascavel) > 0)
+        self.assertEqual(cascavel[0]["name"], "Cascavel-do-rio Listrada")
+
+        # Test defaults for a card in catalog
+        defaults = find_card_defaults({}, "Sol Ring")
+        self.assertIsNotNone(defaults)
+        self.assertEqual(defaults["cmc"], 1)
+        self.assertEqual(defaults["color"], "C")
+        self.assertEqual(defaults["type"], "Artefato")
+
 
 if __name__ == "__main__":
     unittest.main()
