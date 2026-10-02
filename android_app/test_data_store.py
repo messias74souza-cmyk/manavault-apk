@@ -3,7 +3,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from data_store import DataStore, analyze_deck, normalize_data
+from data_store import (
+    DataStore,
+    analyze_deck,
+    check_deck_legality,
+    calculate_full_stats,
+    filter_matches,
+    find_card_defaults,
+    format_decklist,
+    normalize_data,
+    parse_decklist_text,
+)
 
 
 class DataStoreTests(unittest.TestCase):
@@ -86,6 +96,73 @@ class DataStoreTests(unittest.TestCase):
             backup = json.loads(path.with_suffix(".backup.json").read_text(encoding="utf-8"))
             self.assertIn("Before", backup["decks"])
             self.assertNotIn("After", backup["decks"])
+
+    def test_parse_and_format_decklist(self):
+        text = """
+        4 Lightning Bolt
+        20 Mountain
+        Sideboard
+        2 Smash to Smithereens
+        """
+        parsed = parse_decklist_text(text)
+        self.assertEqual(parsed["main"]["Lightning Bolt"]["qty"], 4)
+        self.assertEqual(parsed["main"]["Mountain"]["qty"], 20)
+        self.assertEqual(parsed["side"]["Smash to Smithereens"]["qty"], 2)
+
+        formatted = format_decklist("Burn", parsed)
+        self.assertIn("4 Lightning Bolt", formatted)
+        self.assertIn("Sideboard", formatted)
+        self.assertIn("2 Smash to Smithereens", formatted)
+
+    def test_find_card_defaults(self):
+        decks = {
+            "Burn": {
+                "main": {
+                    "Lightning Bolt": {"qty": 4, "cmc": 1, "color": "R", "type": "Mágica Instantânea"}
+                },
+                "side": {},
+            }
+        }
+        found = find_card_defaults(decks, "lightning bolt")
+        self.assertIsNotNone(found)
+        self.assertEqual(found["cmc"], 1)
+        self.assertEqual(found["color"], "R")
+        self.assertEqual(found["type"], "Mágica Instantânea")
+
+    def test_check_deck_legality(self):
+        legal_deck = {
+            "main": {f"Card_{i}": {"qty": 1} for i in range(60)},
+            "side": {"Side_1": {"qty": 15}},
+        }
+        res = check_deck_legality(legal_deck)
+        self.assertFalse(res["valid"])  # Side_1 has 15 copies (> 4)
+        self.assertTrue(any("Side_1" in issue for issue in res["issues"]))
+
+        ok_deck = {
+            "main": {"Mountain": {"qty": 60}},
+            "side": {f"Side_{i}": {"qty": 1} for i in range(15)},
+        }
+        res_ok = check_deck_legality(ok_deck)
+        self.assertTrue(res_ok["valid"])
+        self.assertEqual(len(res_ok["issues"]), 0)
+
+    def test_stats_and_filters(self):
+        matches = [
+            {"deck": "Burn", "opponent_deck": "Murktide", "result": "Win", "play_draw": "Você (Play)", "event_type": "Casual", "match_date": "2026-10-01", "tags": ["test"]},
+            {"deck": "Burn", "opponent_deck": "Tron", "result": "Loss", "play_draw": "O Adversário (Draw)", "event_type": "Casual", "match_date": "2026-10-02", "tags": ["fnm"]},
+        ]
+        filtered = filter_matches(matches, deck="Burn", tags="test")
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["opponent_deck"], "Murktide")
+
+        stats = calculate_full_stats(matches)
+        self.assertEqual(stats["total_matches"], 2)
+        self.assertEqual(stats["wins"], 1)
+        self.assertEqual(stats["win_rate"], 50.0)
+        self.assertEqual(stats["play_wr"], 100.0)
+        self.assertEqual(stats["draw_wr"], 0.0)
+        self.assertIn("DESEMPENHO POR DECK", stats["summary_text"])
+        self.assertIn("CONFRONTOS (MATCHUPS)", stats["summary_text"])
 
 
 if __name__ == "__main__":
