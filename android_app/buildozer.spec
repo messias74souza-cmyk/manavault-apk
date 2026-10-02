@@ -33,7 +33,7 @@ android.api = 34
 android.minapi = 24
 
 # (str) Android NDK version
-android.ndk = 25b
+android.ndk = 26b
 
 # (list) Android architectures
 android.archs = arm64-v8a
