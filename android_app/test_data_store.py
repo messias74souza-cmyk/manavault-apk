@@ -164,6 +164,32 @@ class DataStoreTests(unittest.TestCase):
         self.assertIn("DESEMPENHO POR DECK", stats["summary_text"])
         self.assertIn("CONFRONTOS (MATCHUPS)", stats["summary_text"])
 
+    def test_image_uri_normalization_and_scryfall_mapping(self):
+        from data_store import map_scryfall_type
+
+        self.assertEqual(map_scryfall_type("Creature — Goblin Guide"), "Criatura")
+        self.assertEqual(map_scryfall_type("Instant"), "Mágica Instantânea")
+        self.assertEqual(map_scryfall_type("Sorcery"), "Feitiço")
+        self.assertEqual(map_scryfall_type("Basic Land — Mountain"), "Terreno")
+        self.assertEqual(map_scryfall_type("Legendary Planeswalker — Chandra"), "Planeswalker")
+        self.assertEqual(map_scryfall_type("Enchantment — Saga"), "Encantamento")
+        self.assertEqual(map_scryfall_type("Artifact"), "Artefato")
+        self.assertEqual(map_scryfall_type("Unknown Type"), "Outros")
+
+        legacy = {
+            "decks": {
+                "Burn": {
+                    "main": {"Lightning Bolt": {"qty": 4, "cmc": 1, "color": "R", "type": "Mágica Instantânea"}},
+                    "side": {},
+                }
+            }
+        }
+        normalized = normalize_data(legacy)
+        bolt = normalized["decks"]["Burn"]["main"]["Lightning Bolt"]
+        self.assertIn("image_uri", bolt)
+        self.assertEqual(bolt["image_uri"], "")
+
 
 if __name__ == "__main__":
     unittest.main()
+

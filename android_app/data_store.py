@@ -123,6 +123,7 @@ def normalize_data(data):
                     card.setdefault("cmc", 0)
                     card.setdefault("color", "C")
                     card.setdefault("description", "")
+                    card.setdefault("image_uri", "")
 
     today = datetime.now().strftime("%Y-%m-%d")
     for match in normalized["matches"]:
@@ -229,8 +230,79 @@ def find_card_defaults(decks, card_name):
                             "color": str(c_info.get("color", "C")),
                             "type": str(c_info.get("type", "Outros")),
                             "description": str(c_info.get("description", "")),
+                            "image_uri": str(c_info.get("image_uri", "")),
                         }
     return None
+
+
+def map_scryfall_type(type_line):
+    tl = (type_line or "").lower()
+    if "creature" in tl:
+        return "Criatura"
+    if "instant" in tl:
+        return "Mágica Instantânea"
+    if "sorcery" in tl:
+        return "Feitiço"
+    if "enchantment" in tl:
+        return "Encantamento"
+    if "artifact" in tl:
+        return "Artefato"
+    if "planeswalker" in tl:
+        return "Planeswalker"
+    if "land" in tl:
+        return "Terreno"
+    return "Outros"
+
+
+def fetch_scryfall_card_info(query):
+    """Consulta os dados e imagem oficial da carta na Scryfall API."""
+    import urllib.parse
+    import urllib.request
+
+    query = str(query or "").strip()
+    if not query:
+        return None
+
+    headers = {"User-Agent": "ManaVaultApp/1.7.0", "Accept": "application/json"}
+    url = "https://api.scryfall.com/cards/named?fuzzy=" + urllib.parse.quote(query)
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=7) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            colors = data.get("colors", [])
+            color_code = "".join(colors) if colors else "C"
+            img = data.get("image_uris", {}).get("normal", "")
+            if not img and "card_faces" in data:
+                img = data["card_faces"][0].get("image_uris", {}).get("normal", "")
+            return {
+                "name": data.get("name"),
+                "cmc": int(data.get("cmc", 0)),
+                "color": color_code,
+                "type": map_scryfall_type(data.get("type_line", "")),
+                "image_url": img,
+            }
+    except Exception:
+        try:
+            s_url = "https://api.scryfall.com/cards/search?q=" + urllib.parse.quote(query)
+            s_req = urllib.request.Request(s_url, headers=headers)
+            with urllib.request.urlopen(s_req, timeout=7) as s_resp:
+                s_data = json.loads(s_resp.read().decode("utf-8"))
+                if s_data.get("data"):
+                    card = s_data["data"][0]
+                    colors = card.get("colors", [])
+                    color_code = "".join(colors) if colors else "C"
+                    img = card.get("image_uris", {}).get("normal", "")
+                    if not img and "card_faces" in card:
+                        img = card["card_faces"][0].get("image_uris", {}).get("normal", "")
+                    return {
+                        "name": card.get("name"),
+                        "cmc": int(card.get("cmc", 0)),
+                        "color": color_code,
+                        "type": map_scryfall_type(card.get("type_line", "")),
+                        "image_url": img,
+                    }
+        except Exception:
+            return None
 
 
 def check_deck_legality(deck):

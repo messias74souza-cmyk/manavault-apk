@@ -72,9 +72,9 @@ jobs:
         if: success()
         with:
           files: android_app/bin/*.apk
-          tag_name: v1.6.0
-          name: "ManaVault Android APK v1.6.0"
-          body: "Arquivo APK do ManaVault pronto para instalar no Android."
+          tag_name: v1.7.0
+          name: "ManaVault Android APK v1.7.0"
+          body: "Arquivo APK do ManaVault com suporte a fotos de cartas, miniatura na lista, visualizador em alta resolução e busca de arte oficial Scryfall."
           draft: false
           prerelease: false
         env:

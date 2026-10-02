@@ -15,7 +15,7 @@ source.dir = .
 source.include_exts = py,json
 
 # (str) Application version
-version = 1.6.0
+version = 1.7.0
 
 # (list) Application requirements
 requirements = python3,kivy,androidstorage4kivy
@@ -24,7 +24,7 @@ requirements = python3,kivy,androidstorage4kivy
 orientation = portrait
 
 # (list) Android permissions
-android.permissions = READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
+android.permissions = INTERNET,CAMERA,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
 
 # (int) Android API to target
 android.api = 34

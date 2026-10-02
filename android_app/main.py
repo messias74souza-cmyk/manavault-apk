@@ -1,21 +1,27 @@
 """Offline ManaVault Android interface built with Kivy.
-Complete professional UI overhaul with modern cards, responsive layouts and clear MTG metrics.
+Complete professional UI with card photo capture, Scryfall integration and image viewer.
 """
 
 import json
 import re
+import threading
+import time
 import unicodedata
+import urllib.parse
+import urllib.request
 from datetime import date, datetime
 from functools import partial
 from pathlib import Path
 
 from kivy.app import App
+from kivy.clock import Clock
 from kivy.core.clipboard import Clipboard
 from kivy.core.window import Window
 from kivy.graphics import Color, RoundedRectangle
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
+from kivy.uix.image import AsyncImage, Image
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import NoTransition, Screen, ScreenManager
@@ -30,6 +36,7 @@ from data_store import (
     calculate_full_stats,
     check_deck_legality,
     empty_data,
+    fetch_scryfall_card_info,
     filter_matches,
     find_card_defaults,
     format_decklist,
@@ -126,7 +133,6 @@ def result_from_score(score, fallback="Win"):
 # UI HELPER FACTORIES
 # ==============================================================================
 def create_card_box(spacing=dp(8), padding=dp(12), bg_color=COLOR_SURFACE_1, radius=8):
-    """Cria um container com visual de cartão moderno e cantos arredondados."""
     box = BoxLayout(
         orientation="vertical",
         size_hint_y=None,
@@ -246,9 +252,6 @@ def show_info_dialog(title, message):
     popup.open()
 
 
-# ==============================================================================
-# BASE SCREEN
-# ==============================================================================
 class ManaVaultScreen(Screen):
     """Tela base com scrollview suave e padding ergonômico."""
 
@@ -292,7 +295,6 @@ class DecksScreen(ManaVaultScreen):
         super().__init__(app_ref, **kwargs)
         self.heading("Gerenciador de Decks", icon="🗂️")
 
-        # Card de Criação
         create_card = create_card_box(padding=dp(12), spacing=dp(8))
         create_card.add_widget(make_label("➕  Criar Novo Deck", height=24, font_size=14, bold=True, color=COLOR_ACCENT))
         create_card.add_widget(make_label("Digite o nome do arquétipo para começar:", height=18, font_size=11, color=COLOR_TEXT_MUTED))
@@ -301,11 +303,9 @@ class DecksScreen(ManaVaultScreen):
         create_card.add_widget(make_button("Criar Deck", self.create_deck, color=COLOR_ACCENT, height=44))
         self.content.add_widget(create_card)
 
-        # Card de Resumo Global
         self.summary_badge = make_label("", height=24, font_size=12, color=COLOR_TEXT_MUTED, halign="center")
         self.content.add_widget(self.summary_badge)
 
-        # Lista de Decks
         self.add_section_header("📚", "Seus Decks Cadastrados")
         self.deck_rows = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10))
         self.deck_rows.bind(minimum_height=self.deck_rows.setter("height"))
@@ -379,20 +379,17 @@ class DecksScreen(ManaVaultScreen):
 
             deck_card = create_card_box(padding=dp(12), spacing=dp(6))
 
-            # Linha superior: Nome do deck e contador total
             top_line = BoxLayout(size_hint_y=None, height=dp(26))
             top_line.add_widget(make_label(deck_name, height=24, font_size=16, bold=True))
             count_lbl = make_label(f"{main_count + side_count} cartas", height=24, font_size=12, bold=True, color=COLOR_ACCENT, halign="right")
             top_line.add_widget(count_lbl)
             deck_card.add_widget(top_line)
 
-            # Sub-linha: Main / Side e Tags
             info_text = f"Principal (Main): {main_count}   ·   Reserva (Side): {side_count}"
             if tags:
                 info_text += f"   ·   Tags: {tags}"
             deck_card.add_widget(make_label(info_text, height=20, font_size=12, color=COLOR_TEXT_MUTED))
 
-            # Linha de botões de ação
             btn_row = BoxLayout(size_hint_y=None, height=dp(36), spacing=dp(8))
             btn_row.add_widget(make_button("🃏  Ver Cartas", partial(self.open_deck_cards, deck_name), color=COLOR_ACCENT, height=34, font_size=12))
             btn_row.add_widget(make_button("📊  Análise", partial(self.open_deck_analysis, deck_name), color=COLOR_SURFACE_2, height=34, font_size=12))
@@ -403,17 +400,16 @@ class DecksScreen(ManaVaultScreen):
 
 
 # ==============================================================================
-# TELA 2: CARTAS DO DECK (TELA EXCLUSIVA COM FILTROS E AÇÕES)
+# TELA 2: CARTAS DO DECK (COM MINIATURAS E VISUALIZADOR DE FOTO)
 # ==============================================================================
 class DeckCardsScreen(ManaVaultScreen):
-    """Lista de cartas organizada, dividida e com ações rápidas de cópias."""
+    """Lista de cartas com miniatura da foto, filtros e visualizador em alta resolução."""
 
     def __init__(self, app_ref, **kwargs):
         super().__init__(app_ref, **kwargs)
         self.heading("Cartas do Deck", icon="🃏")
-        self.active_section = "all"  # "all", "main", "side"
+        self.active_section = "all"
 
-        # Seletor do Deck e Atalho de Adicionar
         top_card = create_card_box(padding=dp(10), spacing=dp(8))
         top_card.add_widget(make_label("Deck em Visualização:", height=20, font_size=12, color=COLOR_TEXT_MUTED))
         self.deck_spinner = make_spinner("Selecione um deck", [])
@@ -424,13 +420,11 @@ class DeckCardsScreen(ManaVaultScreen):
         top_card.add_widget(add_btn)
         self.content.add_widget(top_card)
 
-        # Filtros de Busca e Seção
         filter_card = create_card_box(padding=dp(10), spacing=dp(8))
         self.search_input = make_input("🔍  Buscar carta pelo nome...")
         self.search_input.bind(text=lambda *_: self.render_cards_list())
         filter_card.add_widget(self.search_input)
 
-        # Pílulas de Seção: [ Todas ] [ Principal ] [ Reserva ]
         pills_row = BoxLayout(size_hint_y=None, height=dp(34), spacing=dp(6))
         self.pill_all = make_button("Todas", partial(self.set_section_filter, "all"), color=COLOR_ACCENT, height=32, font_size=12)
         self.pill_main = make_button("Principal", partial(self.set_section_filter, "main"), color=COLOR_SURFACE_2, height=32, font_size=12)
@@ -445,18 +439,15 @@ class DeckCardsScreen(ManaVaultScreen):
         filter_card.add_widget(self.type_filter)
         self.content.add_widget(filter_card)
 
-        # Badge de resumo
         self.count_badge = make_label("", height=22, font_size=12, color=COLOR_TEXT_MUTED, halign="center")
         self.content.add_widget(self.count_badge)
 
-        # Lista de Cartas
         self.cards_list = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8))
         self.cards_list.bind(minimum_height=self.cards_list.setter("height"))
         self.content.add_widget(self.cards_list)
 
     def set_section_filter(self, section, *_):
         self.active_section = section
-        # Update pill colors
         self.pill_all.canvas.before.clear()
         self.pill_main.canvas.before.clear()
         self.pill_side.canvas.before.clear()
@@ -492,7 +483,7 @@ class DeckCardsScreen(ManaVaultScreen):
             if isinstance(card, dict):
                 card["qty"] = new_qty
             else:
-                deck[section][card_name] = {"qty": new_qty, "cmc": 0, "color": "C", "type": "Outros", "description": ""}
+                deck[section][card_name] = {"qty": new_qty, "cmc": 0, "color": "C", "type": "Outros", "description": "", "image_uri": ""}
             self.app_ref.record_change(f"Qtd ajustada: {card_name} ({new_qty} cópias) em {deck_name}")
         if self.app_ref.save_data():
             self.app_ref.refresh_all()
@@ -524,6 +515,59 @@ class DeckCardsScreen(ManaVaultScreen):
         box.add_widget(actions)
         popup.open()
 
+    def show_card_image_dialog(self, card_name, card_info, section_key, *_):
+        """Abre o visualizador da carta com a foto em alta resolução."""
+        image_uri = card_info.get("image_uri", "") if isinstance(card_info, dict) else ""
+        qty = card_info.get("qty", 1) if isinstance(card_info, dict) else 1
+        cmc = card_info.get("cmc", 0) if isinstance(card_info, dict) else 0
+        color = card_info.get("color", "C") if isinstance(card_info, dict) else "C"
+        c_type = card_info.get("type", "Outros") if isinstance(card_info, dict) else "Outros"
+        desc = card_info.get("description", "") if isinstance(card_info, dict) else ""
+
+        box = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
+
+        # Título da carta
+        t_box = BoxLayout(size_hint_y=None, height=dp(26))
+        t_box.add_widget(make_label(card_name, height=24, font_size=16, bold=True))
+        t_box.add_widget(make_label(f"{qty} cópia(s)", height=24, font_size=13, bold=True, color=COLOR_ACCENT, halign="right"))
+        box.add_widget(t_box)
+
+        # Imagem da carta grande
+        img_container = BoxLayout(size_hint_y=None, height=dp(280))
+        if image_uri:
+            full_img = AsyncImage(source=image_uri, allow_stretch=True, keep_ratio=True)
+            img_container.add_widget(full_img)
+        else:
+            no_img_box = create_card_box(bg_color=COLOR_SURFACE_2, padding=dp(20))
+            no_img_box.add_widget(make_label("📷  Nenhuma foto anexada a esta carta.\nVocê pode tirar uma foto ou baixar a arte oficial!", height=54, color=COLOR_TEXT_MUTED, halign="center"))
+            img_container.add_widget(no_img_box)
+        box.add_widget(img_container)
+
+        # Dados da carta
+        info_lbl = make_label(f"Tipo: {c_type}   ·   Custo de Mana: {cmc}   ·   Cor: {format_card_color(color)}", height=20, font_size=12, color=COLOR_TEXT_MUTED)
+        box.add_widget(info_lbl)
+        if desc:
+            box.add_widget(make_label(f"Obs: {desc}", height=20, font_size=11, color=COLOR_TEXT_PRIMARY))
+
+        actions = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
+        popup = Popup(title=f"Visualizador: {card_name}", content=box, size_hint=(0.94, None), height=dp(440))
+
+        def open_add_to_edit(*_):
+            popup.dismiss()
+            add_sc = self.app_ref.screens["add_cards"]
+            add_sc.deck_spinner.text = self.deck_spinner.text
+            add_sc.name_input.text = card_name
+            add_sc.qty_input.text = str(qty)
+            add_sc.cmc_input.text = str(cmc)
+            add_sc.desc_input.text = desc
+            add_sc.set_card_image(image_uri)
+            self.app_ref.show_screen("add_cards")
+
+        actions.add_widget(make_button("Fechar", popup.dismiss, color=COLOR_SURFACE_2))
+        actions.add_widget(make_button("📷  Trocar Foto / Editar", open_add_to_edit, color=COLOR_ACCENT))
+        box.add_widget(actions)
+        popup.open()
+
     def render_cards_list(self):
         self.cards_list.clear_widgets()
         deck_name = self.deck_spinner.text
@@ -549,7 +593,7 @@ class DeckCardsScreen(ManaVaultScreen):
             matching_cards = []
             for c_name, c_info in sorted(cards.items(), key=lambda i: normalize_keyword_search(i[0])):
                 if not isinstance(c_info, dict):
-                    c_info = {"qty": int(c_info), "cmc": 0, "color": "C", "type": "Outros", "description": ""}
+                    c_info = {"qty": int(c_info), "cmc": 0, "color": "C", "type": "Outros", "description": "", "image_uri": ""}
 
                 if term and term not in normalize_keyword_search(c_name):
                     continue
@@ -562,7 +606,6 @@ class DeckCardsScreen(ManaVaultScreen):
                 total_cards_count += sec_qty_sum
                 total_unique_count += len(matching_cards)
 
-                # Cabeçalho da seção
                 self.cards_list.add_widget(make_label(f"▶  {section_title}  ({sec_qty_sum} cartas)", height=28, font_size=14, bold=True, color=COLOR_ACCENT))
 
                 for c_name, c_info in matching_cards:
@@ -572,30 +615,52 @@ class DeckCardsScreen(ManaVaultScreen):
                     color_label = format_card_color(color_code)
                     c_type = c_info.get("type", "Outros")
                     desc = c_info.get("description", "")
+                    img_uri = c_info.get("image_uri", "")
 
-                    card_box = create_card_box(padding=dp(10), spacing=dp(4))
+                    card_box = create_card_box(padding=dp(8), spacing=dp(4))
 
-                    # Linha 1: Nome da carta e badge de quantidade
-                    title_line = BoxLayout(size_hint_y=None, height=dp(24))
-                    title_line.add_widget(make_label(f"{c_name}", height=22, font_size=15, bold=True))
-                    qty_badge = make_label(f"{qty} cópia(s)", height=22, font_size=13, bold=True, color=COLOR_ACCENT, halign="right")
-                    title_line.add_widget(qty_badge)
-                    card_box.add_widget(title_line)
+                    # Conteúdo principal com miniatura à esquerda e dados à direita
+                    content_row = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(8))
 
-                    # Linha 2: Atributos legíveis
-                    details_text = f"Tipo: {c_type}   ·   Custo de Mana: {cmc}   ·   Cor: {color_label}"
-                    card_box.add_widget(make_label(details_text, height=20, font_size=12, color=COLOR_TEXT_MUTED))
+                    # Miniatura da Foto
+                    thumb_container = BoxLayout(size_hint=(None, None), size=(dp(46), dp(62)))
+                    if img_uri:
+                        thumb_img = AsyncImage(source=img_uri, allow_stretch=True, keep_ratio=True)
+                        thumb_container.add_widget(thumb_img)
+                    else:
+                        # Placeholder com ícone
+                        no_thumb = make_button("📷", partial(self.show_card_image_dialog, c_name, c_info, section_key), color=COLOR_SURFACE_2, height=62, font_size=16)
+                        no_thumb.size_hint = (1, 1)
+                        thumb_container.add_widget(no_thumb)
+                    content_row.add_widget(thumb_container)
 
-                    # Linha 3: Observações (se houver)
+                    # Coluna de texto
+                    text_col = BoxLayout(orientation="vertical", spacing=dp(1))
+
+                    t_line = BoxLayout(size_hint_y=None, height=dp(22))
+                    t_line.add_widget(make_label(f"{c_name}", height=20, font_size=14, bold=True))
+                    qty_badge = make_label(f"{qty}x", height=20, font_size=13, bold=True, color=COLOR_ACCENT, halign="right")
+                    t_line.add_widget(qty_badge)
+                    text_col.add_widget(t_line)
+
+                    details_text = f"{c_type}  ·  CMC: {cmc}  ·  {color_label}"
+                    text_col.add_widget(make_label(details_text, height=18, font_size=11, color=COLOR_TEXT_MUTED))
+
                     if desc:
-                        card_box.add_widget(make_label(f"📝 Obs: {desc}", height=18, font_size=11, color=COLOR_TEXT_PRIMARY))
+                        text_col.add_widget(make_label(f"Obs: {desc}", height=16, font_size=10, color=COLOR_TEXT_PRIMARY))
+                    else:
+                        text_col.add_widget(make_label("Toque para ver a foto", height=16, font_size=10, color=COLOR_TEXT_FAINT))
 
-                    # Linha 4: Botões rápidos de ajuste
-                    btn_row = BoxLayout(size_hint_y=None, height=dp(30), spacing=dp(6))
-                    btn_row.add_widget(make_button("-1 Cópia", partial(self.adjust_qty, section_key, c_name, -1), color=COLOR_SURFACE_2, height=28, font_size=11))
-                    btn_row.add_widget(make_button("+1 Cópia", partial(self.adjust_qty, section_key, c_name, 1), color=COLOR_SURFACE_2, height=28, font_size=11))
-                    btn_row.add_widget(make_button("📝 Obs", partial(self.edit_card_notes_dialog, section_key, c_name), color=COLOR_SURFACE_2, height=28, font_size=11))
-                    btn_row.add_widget(make_button("🗑️ Excluir", partial(self.adjust_qty, section_key, c_name, -qty), color=COLOR_DANGER, height=28, font_size=11))
+                    content_row.add_widget(text_col)
+                    card_box.add_widget(content_row)
+
+                    # Linha de Ações
+                    btn_row = BoxLayout(size_hint_y=None, height=dp(28), spacing=dp(6))
+                    btn_row.add_widget(make_button("🔍 Ver Foto", partial(self.show_card_image_dialog, c_name, c_info, section_key), color=COLOR_ACCENT, height=26, font_size=11))
+                    btn_row.add_widget(make_button("-1 Cópia", partial(self.adjust_qty, section_key, c_name, -1), color=COLOR_SURFACE_2, height=26, font_size=11))
+                    btn_row.add_widget(make_button("+1 Cópia", partial(self.adjust_qty, section_key, c_name, 1), color=COLOR_SURFACE_2, height=26, font_size=11))
+                    btn_row.add_widget(make_button("📝 Obs", partial(self.edit_card_notes_dialog, section_key, c_name), color=COLOR_SURFACE_2, height=26, font_size=11))
+                    btn_row.add_widget(make_button("🗑️", partial(self.adjust_qty, section_key, c_name, -qty), color=COLOR_DANGER, height=26, font_size=11))
                     card_box.add_widget(btn_row)
 
                     self.cards_list.add_widget(card_box)
@@ -622,14 +687,15 @@ class DeckCardsScreen(ManaVaultScreen):
 
 
 # ==============================================================================
-# TELA 3: ADICIONAR / ATUALIZAR CARTAS (FORMULÁRIO MODULAR)
+# TELA 3: ADICIONAR / ATUALIZAR CARTAS (COM SUPORTE A FOTOS E SCRYFALL)
 # ==============================================================================
 class AddCardsScreen(ManaVaultScreen):
-    """Formulário organizado em cartões temáticos com campos 100% legíveis."""
+    """Formulário completo com captura de foto da câmera e busca de arte oficial."""
 
     def __init__(self, app_ref, **kwargs):
         super().__init__(app_ref, **kwargs)
         self.heading("Adicionar / Atualizar Carta", icon="➕")
+        self.current_image_uri = ""
 
         # Card 1: Destino
         c1 = create_card_box(padding=dp(12), spacing=dp(6))
@@ -641,13 +707,34 @@ class AddCardsScreen(ManaVaultScreen):
         c1.add_widget(self.section_spinner)
         self.content.add_widget(c1)
 
-        # Card 2: Identificação da Carta
+        # Card 2: Foto da Carta
+        c_photo = create_card_box(padding=dp(12), spacing=dp(8))
+        c_photo.add_widget(make_label("2. Foto / Arte da Carta", height=22, font_size=13, bold=True, color=COLOR_ACCENT))
+        c_photo.add_widget(make_label("Tire uma foto da sua carta física ou busque a arte oficial:", height=18, font_size=11, color=COLOR_TEXT_MUTED))
+
+        # Preview da Imagem
+        self.image_preview_container = BoxLayout(size_hint_y=None, height=dp(140))
+        self.image_preview_widget = AsyncImage(source="", allow_stretch=True, keep_ratio=True)
+        self.no_image_lbl = make_label("📷  Nenhuma foto selecionada ainda.", height=30, color=COLOR_TEXT_MUTED, halign="center")
+        self.image_preview_container.add_widget(self.no_image_lbl)
+        c_photo.add_widget(self.image_preview_container)
+
+        # Botões de Ação da Foto
+        photo_btn_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
+        photo_btn_row.add_widget(make_button("📷  Tirar / Escolher Foto", self.choose_or_take_photo, color=COLOR_ACCENT, height=40, font_size=12))
+        photo_btn_row.add_widget(make_button("🌐  Buscar Arte Oficial", self.fetch_official_art, color=COLOR_SURFACE_2, height=40, font_size=12))
+        c_photo.add_widget(photo_btn_row)
+
+        remove_photo_btn = make_button("❌  Remover Foto Desta Carta", self.remove_photo, color=COLOR_SURFACE_3, height=32, font_size=11)
+        c_photo.add_widget(remove_photo_btn)
+        self.content.add_widget(c_photo)
+
+        # Card 3: Identificação da Carta
         c2 = create_card_box(padding=dp(12), spacing=dp(6))
-        c2.add_widget(make_label("2. Identificação da Carta", height=22, font_size=13, bold=True, color=COLOR_ACCENT))
-        c2.add_widget(make_label("Digite o nome e toque em Buscar para autopreencher:", height=18, font_size=11, color=COLOR_TEXT_MUTED))
+        c2.add_widget(make_label("3. Identificação da Carta", height=22, font_size=13, bold=True, color=COLOR_ACCENT))
 
         name_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
-        self.name_input = make_input("Ex: Lightning Bolt, Raio, Llanowar Elves...")
+        self.name_input = make_input("Nome da carta (ex: Lightning Bolt, Raio...)")
         self.name_input.bind(focus=self.on_name_focus_changed)
         name_row.add_widget(self.name_input)
         name_row.add_widget(make_button("🔍  Buscar", self.try_autofill, color=COLOR_SURFACE_2, height=46, font_size=12))
@@ -658,12 +745,11 @@ class AddCardsScreen(ManaVaultScreen):
         c2.add_widget(self.type_spinner)
         self.content.add_widget(c2)
 
-        # Card 3: Atributos de Jogo (Quantidade, Custo de Mana e Cor)
+        # Card 4: Atributos de Jogo
         c3 = create_card_box(padding=dp(12), spacing=dp(6))
-        c3.add_widget(make_label("3. Atributos da Carta", height=22, font_size=13, bold=True, color=COLOR_ACCENT))
+        c3.add_widget(make_label("4. Quantidade, Custo de Mana e Cor", height=22, font_size=13, bold=True, color=COLOR_ACCENT))
 
-        # Quantidade de cópias
-        c3.add_widget(make_label("Quantidade de Cópias (Playset costuma ser 4):", height=18, font_size=12, color=COLOR_TEXT_MUTED))
+        c3.add_widget(make_label("Quantidade de Cópias:", height=18, font_size=12, color=COLOR_TEXT_MUTED))
         qty_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         qty_row.add_widget(make_button("-", lambda *_: self.adjust_input_number(self.qty_input, -1), color=COLOR_SURFACE_2, height=44, font_size=16))
         self.qty_input = make_input("Qtd", "1")
@@ -671,8 +757,7 @@ class AddCardsScreen(ManaVaultScreen):
         qty_row.add_widget(make_button("+", lambda *_: self.adjust_input_number(self.qty_input, 1), color=COLOR_SURFACE_2, height=44, font_size=16))
         c3.add_widget(qty_row)
 
-        # Custo de Mana (CMC)
-        c3.add_widget(make_label("Custo de Mana Convertido (CMC - ex: 1 para Raio, 0 para Terreno):", height=18, font_size=12, color=COLOR_TEXT_MUTED))
+        c3.add_widget(make_label("Custo de Mana Convertido (CMC):", height=18, font_size=12, color=COLOR_TEXT_MUTED))
         cmc_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         cmc_row.add_widget(make_button("-", lambda *_: self.adjust_input_number(self.cmc_input, -1, min_val=0), color=COLOR_SURFACE_2, height=44, font_size=16))
         self.cmc_input = make_input("CMC", "0")
@@ -680,7 +765,6 @@ class AddCardsScreen(ManaVaultScreen):
         cmc_row.add_widget(make_button("+", lambda *_: self.adjust_input_number(self.cmc_input, 1, min_val=0), color=COLOR_SURFACE_2, height=44, font_size=16))
         c3.add_widget(cmc_row)
 
-        # Cor da Carta
         c3.add_widget(make_label("Cor da Carta:", height=18, font_size=12, color=COLOR_TEXT_MUTED))
         self.color_spinner = make_spinner("Incolor (C) - Terrenos / Artefatos", list(COLOR_OPTIONS_MAP.keys()))
         self.color_spinner.bind(text=self.on_color_spinner_changed)
@@ -690,17 +774,16 @@ class AddCardsScreen(ManaVaultScreen):
         c3.add_widget(self.custom_color_input)
         self.content.add_widget(c3)
 
-        # Card 4: Observações Opcionais
-        c4 = create_card_box(padding=dp(12), spacing=dp(6))
-        c4.add_widget(make_label("4. Observações / Função no Deck (Opcional)", height=22, font_size=13, bold=True, color=COLOR_ACCENT))
+        # Card 5: Observações Opcionais
+        c5 = create_card_box(padding=dp(12), spacing=dp(6))
+        c5.add_widget(make_label("5. Observações / Função no Deck (Opcional)", height=22, font_size=13, bold=True, color=COLOR_ACCENT))
         self.desc_input = make_input("Ex: Remoção rápida, finalizador, acelerador de mana...")
-        c4.add_widget(self.desc_input)
-        self.content.add_widget(c4)
+        c5.add_widget(self.desc_input)
+        self.content.add_widget(c5)
 
-        # Botão Principal Salvar
+        # Botão Salvar
         self.content.add_widget(make_button("💾  Salvar Carta no Deck", self.save_card, color=COLOR_ACCENT, height=48, font_size=14))
 
-        # Ações Secundárias
         sec_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
         sec_row.add_widget(make_button("⚖️  Checar Regras", self.check_legality, color=COLOR_SURFACE_2, height=40, font_size=12))
         sec_row.add_widget(make_button("📋  Ver Cartas do Deck", self.view_deck_cards, color=COLOR_SURFACE_2, height=40, font_size=12))
@@ -708,6 +791,119 @@ class AddCardsScreen(ManaVaultScreen):
 
         self.feedback_label = make_label("", height=24, font_size=12, color=COLOR_TEXT_MUTED, halign="center")
         self.content.add_widget(self.feedback_label)
+
+    def set_card_image(self, uri):
+        """Atualiza a imagem selecionada e o preview."""
+        self.current_image_uri = str(uri or "").strip()
+        self.image_preview_container.clear_widgets()
+        if self.current_image_uri:
+            self.image_preview_widget.source = self.current_image_uri
+            self.image_preview_widget.reload()
+            self.image_preview_container.add_widget(self.image_preview_widget)
+        else:
+            self.image_preview_container.add_widget(self.no_image_lbl)
+
+    def remove_photo(self, *_):
+        self.set_card_image("")
+        self.feedback_label.text = "Foto removida desta carta."
+        self.feedback_label.color = COLOR_TEXT_MUTED
+
+    def choose_or_take_photo(self, *_):
+        """Abre a câmera nativa ou galeria de imagens para escolher/tirar foto."""
+        if Chooser is not None and SharedStorage is not None:
+            self.chooser = Chooser(self._on_image_chosen_android)
+            self.chooser.choose_content("image/*")
+        else:
+            # Fallback desktop testing
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+                root = tk.Tk()
+                root.withdraw()
+                file_path = filedialog.askopenfilename(
+                    title="Escolha uma foto da carta",
+                    filetypes=[("Imagens", "*.png;*.jpg;*.jpeg;*.webp")],
+                )
+                root.destroy()
+                if file_path:
+                    self._save_local_photo(file_path)
+            except Exception as e:
+                self.app_ref.set_status(f"Seleção de foto disponível no APK: {e}")
+
+    def _on_image_chosen_android(self, shared_files):
+        if not shared_files:
+            return
+        try:
+            private_file = SharedStorage().copy_from_shared(shared_files[0])
+            if private_file:
+                Clock.schedule_once(lambda dt: self._save_local_photo(private_file), 0)
+        except Exception as e:
+            Clock.schedule_once(lambda dt: self.app_ref.set_status(f"Erro ao carregar foto: {e}"), 0)
+
+    def _save_local_photo(self, source_path):
+        try:
+            dest_dir = self.app_ref.images_dir
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            filename = f"card_{int(time.time() * 1000)}.jpg"
+            dest_path = dest_dir / filename
+
+            # Copy file
+            dest_path.write_bytes(Path(source_path).read_bytes())
+            self.set_card_image(str(dest_path))
+            self.feedback_label.text = "✓ Foto da carta carregada e salva com sucesso!"
+            self.feedback_label.color = COLOR_SUCCESS
+        except Exception as e:
+            self.feedback_label.text = f"Erro ao salvar foto: {e}"
+            self.feedback_label.color = COLOR_DANGER
+
+    def fetch_official_art(self, *_):
+        """Busca os dados e a foto oficial da carta na Scryfall em segundo plano."""
+        query = self.name_input.text.strip()
+        if not query:
+            self.feedback_label.text = "Digite o nome da carta para buscar a arte oficial."
+            self.feedback_label.color = COLOR_WARNING
+            return
+
+        self.feedback_label.text = "Buscando dados e arte oficial na Scryfall..."
+        self.feedback_label.color = COLOR_ACCENT
+
+        def worker():
+            info = fetch_scryfall_card_info(query)
+            Clock.schedule_once(lambda dt: self._on_scryfall_result(info), 0)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_scryfall_result(self, info):
+        if not info:
+            self.feedback_label.text = "Carta não encontrada na Scryfall. Verifique o nome."
+            self.feedback_label.color = COLOR_WARNING
+            return
+
+        self.name_input.text = info["name"]
+        self.cmc_input.text = str(info["cmc"])
+        self.custom_color_input.text = info["color"]
+
+        matched_opt = None
+        for opt_text, opt_code in COLOR_OPTIONS_MAP.items():
+            if opt_code == info["color"]:
+                matched_opt = opt_text
+                break
+        if matched_opt:
+            self.color_spinner.text = matched_opt
+        else:
+            self.color_spinner.text = "Multicolorida (Duas ou mais cores)"
+
+        if info["type"] in CARD_TYPES:
+            self.type_spinner.text = info["type"]
+
+        img_url = info.get("image_url", "")
+        if img_url:
+            self.set_card_image(img_url)
+            self.feedback_label.text = "✓ Dados e arte oficial carregados da Scryfall!"
+            self.feedback_label.color = COLOR_SUCCESS
+        else:
+            self.feedback_label.text = "✓ Dados carregados (sem imagem disponível)."
+            self.feedback_label.color = COLOR_SUCCESS
 
     def adjust_input_number(self, target_input, delta, min_val=1):
         try:
@@ -756,8 +952,15 @@ class AddCardsScreen(ManaVaultScreen):
             if not self.desc_input.text.strip():
                 self.desc_input.text = str(found.get("description", ""))
 
-            self.feedback_label.text = f"✓ Dados recuperados automaticamente para '{card_name}'."
+            existing_img = found.get("image_uri", "")
+            if existing_img and not self.current_image_uri:
+                self.set_card_image(existing_img)
+
+            self.feedback_label.text = f"✓ Dados recuperados do histórico para '{card_name}'."
             self.feedback_label.color = COLOR_SUCCESS
+        else:
+            # If not in local history, query Scryfall automatically
+            self.fetch_official_art()
 
     def save_card(self, *_):
         deck_name = self.deck_spinner.text
@@ -800,15 +1003,17 @@ class AddCardsScreen(ManaVaultScreen):
             "color": color,
             "type": card_type,
             "description": description,
+            "image_uri": self.current_image_uri,
         }
 
         sec_label = "Sideboard" if section_key == "side" else "Mainboard"
-        self.app_ref.record_change(f"Carta salva: {card_name} ({qty} cópias) no {sec_label} de {deck_name}")
+        self.app_ref.record_change(f"Carta salva: {card_name} ({qty} cópias) com foto no {sec_label} de {deck_name}")
         if self.app_ref.save_data():
             self.name_input.text = ""
             self.desc_input.text = ""
             self.qty_input.text = "1"
-            self.feedback_label.text = f"✓ {qty} cópia(s) de '{card_name}' salva(s) no {sec_label}!"
+            self.set_card_image("")
+            self.feedback_label.text = f"✓ '{card_name}' ({qty}x) salva com sucesso no {sec_label}!"
             self.feedback_label.color = COLOR_SUCCESS
             self.app_ref.set_status(f"Carta '{card_name}' salva.")
             self.app_ref.refresh_all()
@@ -864,7 +1069,6 @@ class DeckAnalysisScreen(ManaVaultScreen):
         super().__init__(app_ref, **kwargs)
         self.heading("Análise do Deck", icon="📊")
 
-        # Seleção do Deck
         top_card = create_card_box(padding=dp(10), spacing=dp(6))
         top_card.add_widget(make_label("Deck em Análise:", height=20, font_size=12, color=COLOR_TEXT_MUTED))
         self.deck_spinner = make_spinner("Selecione um deck", [])
@@ -872,7 +1076,6 @@ class DeckAnalysisScreen(ManaVaultScreen):
         top_card.add_widget(self.deck_spinner)
         self.content.add_widget(top_card)
 
-        # Painel Rápido de Métricas (Grid 2x2)
         self.overview_card = create_card_box(padding=dp(12), spacing=dp(8))
         self.stat_main_lbl = make_label("📦  Mainboard: 0 cartas", height=22, font_size=13, bold=True)
         self.stat_side_lbl = make_label("🎒  Sideboard: 0 cartas", height=22, font_size=13, bold=True)
@@ -893,7 +1096,6 @@ class DeckAnalysisScreen(ManaVaultScreen):
         self.overview_card.add_widget(grid)
         self.content.add_widget(self.overview_card)
 
-        # Gráfico da Curva de Mana
         curve_card = create_card_box(padding=dp(12), spacing=dp(8))
         curve_card.add_widget(make_label("📈  Curva de Mana (CMC)", height=22, font_size=14, bold=True, color=COLOR_ACCENT))
         curve_card.add_widget(make_label("Distribuição proporcional de mágicas por valor de mana:", height=18, font_size=11, color=COLOR_TEXT_MUTED))
@@ -908,7 +1110,6 @@ class DeckAnalysisScreen(ManaVaultScreen):
         curve_card.add_widget(self.mana_curve_container)
         self.content.add_widget(curve_card)
 
-        # Distribuição de Cores e Tipos
         dist_card = create_card_box(padding=dp(12), spacing=dp(8))
         dist_card.add_widget(make_label("🎨  Cores e Tipos de Cartas", height=22, font_size=14, bold=True, color=COLOR_ACCENT))
 
@@ -925,7 +1126,6 @@ class DeckAnalysisScreen(ManaVaultScreen):
         dist_card.add_widget(self.dist_label)
         self.content.add_widget(dist_card)
 
-        # Ferramentas de Decklist
         tools_card = create_card_box(padding=dp(12), spacing=dp(8))
         tools_card.add_widget(make_label("🛠️  Ferramentas de Decklist", height=22, font_size=14, bold=True, color=COLOR_ACCENT))
 
@@ -936,7 +1136,6 @@ class DeckAnalysisScreen(ManaVaultScreen):
         tools_card.add_widget(t_row)
         self.content.add_widget(tools_card)
 
-        # Tags e Plano de Jogo
         plan_card = create_card_box(padding=dp(12), spacing=dp(8))
         plan_card.add_widget(make_label("🏷️  Tags & Plano de Jogo", height=22, font_size=14, bold=True, color=COLOR_ACCENT))
         self.deck_tags_input = make_input("Tags (ex: Modern, Aggro, Burn)")
@@ -1010,12 +1209,14 @@ class DeckAnalysisScreen(ManaVaultScreen):
                     cmc = existing.get("cmc", c_data.get("cmc", 0)) if isinstance(existing, dict) else c_data.get("cmc", 0)
                     color = existing.get("color", c_data.get("color", "C")) if isinstance(existing, dict) else c_data.get("color", "C")
                     c_type = existing.get("type", c_data.get("type", "Outros")) if isinstance(existing, dict) else c_data.get("type", "Outros")
+                    img_uri = existing.get("image_uri", "") if isinstance(existing, dict) else ""
                     deck[sec][c_name] = {
                         "qty": new_qty,
                         "cmc": cmc,
                         "color": color,
                         "type": c_type,
                         "description": existing.get("description", "") if isinstance(existing, dict) else "",
+                        "image_uri": img_uri,
                     }
             self.app_ref.record_change(f"Decklist importada para: {deck_name}")
             popup.dismiss()
@@ -1055,7 +1256,6 @@ class DeckAnalysisScreen(ManaVaultScreen):
             self.stat_legal_lbl.text = f"⚖️  {len(summary['warnings'])} aviso(s) ⚠"
             self.stat_legal_lbl.color = COLOR_WARNING
 
-        # Curva de mana visual
         self.mana_curve_container.clear_widgets()
         curve = summary["mana_curve"]
         max_cmc = max(max(curve.keys(), default=0), 6)
@@ -1081,7 +1281,6 @@ class DeckAnalysisScreen(ManaVaultScreen):
             col.add_widget(make_label(f"{cmc}+" if cmc == max_cmc and cmc >= 6 else f"{cmc}", height=18, font_size=11, color=COLOR_TEXT_MUTED, halign="center"))
             self.mana_curve_container.add_widget(col)
 
-        # Tipos e Cores
         types_text = "   ·   ".join(f"{k}: {v}" for k, v in summary["types"].items()) or "Nenhum"
         colors_readable = []
         for c, qty in summary["colors"].items():
@@ -1115,7 +1314,6 @@ class MatchesScreen(ManaVaultScreen):
         self.edit_index = None
         self.heading("Registro de Partidas", icon="⚔️")
 
-        # Card 1: Seu Deck e Oponente
         c1 = create_card_box(padding=dp(12), spacing=dp(6))
         c1.add_widget(make_label("1. Jogadores & Decks", height=22, font_size=13, bold=True, color=COLOR_ACCENT))
         self.deck_spinner = make_spinner("Selecione seu deck", [])
@@ -1131,11 +1329,9 @@ class MatchesScreen(ManaVaultScreen):
         c1.add_widget(opp_deck_row)
         self.content.add_widget(c1)
 
-        # Card 2: Resultado e Posição
         c2 = create_card_box(padding=dp(12), spacing=dp(6))
         c2.add_widget(make_label("2. Resultado & Placar de Games", height=22, font_size=13, bold=True, color=COLOR_ACCENT))
 
-        # Botões rápidos Vitória / Derrota
         res_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
         self.btn_win = make_button("🏆  Vitória", partial(self.set_result_quick, "Win"), color=COLOR_SUCCESS, height=38, font_size=13)
         self.btn_loss = make_button("❌  Derrota", partial(self.set_result_quick, "Loss"), color=COLOR_SURFACE_2, height=38, font_size=13)
@@ -1158,7 +1354,6 @@ class MatchesScreen(ManaVaultScreen):
         c2.add_widget(self.event_spinner)
         self.content.add_widget(c2)
 
-        # Card 3: Metadados
         c3 = create_card_box(padding=dp(12), spacing=dp(6))
         c3.add_widget(make_label("3. Data & Anotações de Sideboard", height=22, font_size=13, bold=True, color=COLOR_ACCENT))
         self.date_input = make_input("Data da partida (AAAA-MM-DD)", date.today().isoformat())
@@ -1353,7 +1548,6 @@ class ResultsScreen(ManaVaultScreen):
         super().__init__(app_ref, **kwargs)
         self.heading("Resultados & Estatísticas", icon="🏆")
 
-        # Filtros
         filter_card = create_card_box(padding=dp(10), spacing=dp(6))
         filter_card.add_widget(make_label("Filtros do Histórico:", height=18, font_size=12, color=COLOR_TEXT_MUTED))
 
@@ -1377,7 +1571,6 @@ class ResultsScreen(ManaVaultScreen):
         filter_card.add_widget(filter_btn_row)
         self.content.add_widget(filter_card)
 
-        # Card de Destaque das Métricas
         self.stats_card = create_card_box(padding=dp(12), spacing=dp(8))
         self.stats_summary_label = Label(
             text="",
@@ -1392,7 +1585,6 @@ class ResultsScreen(ManaVaultScreen):
         self.stats_card.add_widget(self.stats_summary_label)
         self.content.add_widget(self.stats_card)
 
-        # Backup de Dados
         backup_card = create_card_box(padding=dp(10), spacing=dp(6))
         backup_card.add_widget(make_label("💾  Backup de Dados (JSON)", height=20, font_size=12, bold=True, color=COLOR_ACCENT))
         b_row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(6))
@@ -1401,7 +1593,6 @@ class ResultsScreen(ManaVaultScreen):
         backup_card.add_widget(b_row)
         self.content.add_widget(backup_card)
 
-        # Histórico de Partidas
         self.add_section_header("📜", "Histórico de Partidas Recentes")
         self.matches_list = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8))
         self.matches_list.bind(minimum_height=self.matches_list.setter("height"))
@@ -1509,18 +1700,15 @@ class ResultsScreen(ManaVaultScreen):
 
             card_box = create_card_box(padding=dp(10), spacing=dp(3))
 
-            # Linha 1: Decks e status
             t_row = BoxLayout(size_hint_y=None, height=dp(24))
             t_row.add_widget(make_label(f"{match.get('deck', '')} vs {opp}", height=22, font_size=14, bold=True))
             badge = make_label(f"[{res_label}]", height=22, font_size=12, bold=True, color=res_color, halign="right")
             t_row.add_widget(badge)
             card_box.add_widget(t_row)
 
-            # Linha 2: Detalhes
             sub_text = f"Placar: {match.get('games_score', 'N/D')}   ·   {match.get('play_draw', 'N/D')}   ·   {match.get('match_date', '')}"
             card_box.add_widget(make_label(sub_text, height=20, font_size=12, color=COLOR_TEXT_MUTED))
 
-            # Linha 3: Botões
             btn_row = BoxLayout(size_hint_y=None, height=dp(30), spacing=dp(6))
             btn_row.add_widget(make_button("Ver Detalhes", partial(self.show_match_details_dialog, original_idx, match), color=COLOR_SURFACE_2, height=28, font_size=11))
             btn_row.add_widget(make_button("Editar", lambda *_, i=original_idx, m=match: self.app_ref.screens["matches"].load_match_for_edit(m, i), color=COLOR_SURFACE_2, height=28, font_size=11))
@@ -1616,7 +1804,7 @@ class RulesScreen(ManaVaultScreen):
 
 
 # ==============================================================================
-# MAIN APP CLASS (HEADER REFINADO COM MENU NA EXTREMA DIREITA)
+# MAIN APP CLASS
 # ==============================================================================
 class ManaVaultApp(App):
     title = "ManaVault"
@@ -1634,6 +1822,9 @@ class ManaVaultApp(App):
     def build(self):
         Window.clearcolor = COLOR_BG
         self.store = DataStore(Path(self.user_data_dir) / "magic_data.json")
+        self.images_dir = Path(self.user_data_dir) / "card_images"
+        self.images_dir.mkdir(parents=True, exist_ok=True)
+
         self.storage_blocked = False
         self.load_error = ""
 
@@ -1645,7 +1836,6 @@ class ManaVaultApp(App):
 
         root = BoxLayout(orientation="vertical", spacing=dp(4), padding=[dp(6), dp(4)])
 
-        # Top Bar Elegante com Logo, Título da Tela e Botão Menu
         top_bar = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8), padding=[dp(6), dp(2)])
         with top_bar.canvas.before:
             Color(*COLOR_SURFACE_1)
@@ -1655,14 +1845,12 @@ class ManaVaultApp(App):
         self.header_title = make_label("ManaVault  ·  Decks", height=42, font_size=15, bold=True, color=COLOR_ACCENT)
         top_bar.add_widget(self.header_title)
 
-        # Botão Menu na Extrema Direita
         self.menu_button = make_button("☰  Menu", self.open_navigation_menu, color=COLOR_SURFACE_2, text_color=COLOR_TEXT_PRIMARY, height=38, font_size=13)
         self.menu_button.size_hint_x = None
         self.menu_button.width = dp(94)
         top_bar.add_widget(self.menu_button)
         root.add_widget(top_bar)
 
-        # Gerenciador de Telas
         self.manager = ScreenManager(transition=NoTransition())
         self.screens = {
             "decks": DecksScreen(self, name="decks"),
@@ -1677,7 +1865,6 @@ class ManaVaultApp(App):
             self.manager.add_widget(s)
         root.add_widget(self.manager)
 
-        # Rodapé Sutil
         self.status_label = make_label("Offline  ·  Armazenamento Local Protegido", height=18, font_size=10, color=COLOR_TEXT_FAINT, halign="center")
         root.add_widget(self.status_label)
 
@@ -1690,7 +1877,6 @@ class ManaVaultApp(App):
         return root
 
     def open_navigation_menu(self, *_):
-        """Abre o menu moderno na lateral direita."""
         box = BoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(12), dp(12)])
         scroll = ScrollView(do_scroll_x=False)
         items_layout = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
@@ -1698,8 +1884,8 @@ class ManaVaultApp(App):
 
         menu_items = [
             ("decks", "🗂️  1. Gerenciar Decks"),
-            ("deck_cards", "🃏  2. Cartas do Deck (Lista)"),
-            ("add_cards", "➕  3. Adicionar Cartas"),
+            ("deck_cards", "🃏  2. Cartas do Deck (Lista & Fotos)"),
+            ("add_cards", "➕  3. Adicionar Cartas & Fotos"),
             ("analysis", "📊  4. Análise do Deck (Curva)"),
             ("matches", "⚔️  5. Registro de Partidas"),
             ("results", "🏆  6. Resultados & Estatísticas"),
