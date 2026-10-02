@@ -36,7 +36,7 @@ android.minapi = 24
 android.ndk = 25b
 
 # (list) Android architectures
-android.archs = arm64-v8a, armeabi-v7a
+android.archs = arm64-v8a
 
 # (bool) Accept Android SDK license
 android.accept_sdk_license = True
@@ -46,6 +46,9 @@ android.allow_backup = True
 
 # (str) Android entry point
 p4a.bootstrap = sdl2
+
+# (str) python-for-android branch to use
+p4a.branch = develop
 
 [buildozer]
 # (int) Log level (0 = error only, 1 = info, 2 = debug (with command output))
