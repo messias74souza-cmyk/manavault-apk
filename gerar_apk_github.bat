@@ -73,7 +73,7 @@ gh run watch
 echo.
 echo Baixando o arquivo APK compilado...
 if not exist "dist_apk" mkdir dist_apk
-gh run download --name ManaVault-Android-debug --dir dist_apk
+gh run download --name ManaVault-Android-debug --dir dist_apk --clobber
 
 echo.
 echo ========================================================
