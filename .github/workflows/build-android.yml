@@ -47,11 +47,37 @@ jobs:
           python -m pip install "pip==24.3.1" setuptools wheel
           python -m pip install "Cython==0.29.36" buildozer
 
-      - name: Pre-clone python-for-android and apply libthorvg patch
+      - name: Pre-clone python-for-android and apply libthorvg and maven mirror patches
         run: |
           mkdir -p android_app/.buildozer/android/platform
           git clone -b develop --single-branch https://github.com/kivy/python-for-android.git android_app/.buildozer/android/platform/python-for-android
           sed -i 's|"lib/clang/\*/lib/linux"|"lib*/clang/\*/lib/linux"|g' android_app/.buildozer/android/platform/python-for-android/pythonforandroid/recipes/libthorvg/__init__.py
+          python3 -c "
+          import glob
+          files = glob.glob('android_app/.buildozer/android/platform/python-for-android/**/build*.tmpl.gradle', recursive=True)
+          print('Found gradle templates:', files)
+          for p in files:
+              with open(p, 'r', encoding='utf-8') as f:
+                  s = f.read()
+              s = s.replace('repositories {', 'repositories {\n        maven { url \"https://maven-central.storage-download.googleapis.com/maven2/\" }\n        maven { url \"https://repo1.maven.org/maven2/\" }')
+              with open(p, 'w', encoding='utf-8') as f:
+                  f.write(s)
+          "
+          mkdir -p ~/.gradle/init.d
+          cat << 'EOF' > ~/.gradle/init.d/mirror.init.gradle
+          allprojects {
+              buildscript {
+                  repositories {
+                      maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' }
+                      maven { url 'https://repo1.maven.org/maven2/' }
+                  }
+              }
+              repositories {
+                  maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' }
+                  maven { url 'https://repo1.maven.org/maven2/' }
+              }
+          }
+          EOF
 
       - name: Setup persistent Android debug keystore
         run: |

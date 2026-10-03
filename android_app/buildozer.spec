@@ -23,6 +23,9 @@ requirements = python3,kivy,androidstorage4kivy
 # (list) Gradle dependencies to add
 android.gradle_dependencies = com.google.mlkit:text-recognition:16.0.1
 
+# (list) Gradle repositories to add
+android.add_gradle_repositories = "maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' }", "maven { url 'https://repo1.maven.org/maven2/' }"
+
 # (bool) Enable AndroidX support
 android.enable_androidx = True
 
