@@ -94,9 +94,9 @@ jobs:
         if: success()
         with:
           files: android_app/bin/*.apk
-          tag_name: v1.13.0
-          name: "ManaVault Android APK v1.13.0"
-          body: "Arquivo APK do ManaVault com prioridade absoluta para a IA Visual Gemini na pesquisa por foto, otimização de compactação de imagem nativa e fallback para Scryfall apenas se o Gemini não encontrar."
+          tag_name: v1.14.0
+          name: "ManaVault Android APK v1.14.0"
+          body: "ManaVault v1.14.0 - Tema visual AMOLED Black, contornos azul real nos botões, menu lateral moderno à esquerda, efeitos animados de carregamento contínuo e espaçamentos otimizados."
           draft: false
           prerelease: false
         env:
