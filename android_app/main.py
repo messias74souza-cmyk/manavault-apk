@@ -31,6 +31,7 @@ from kivy.uix.textinput import TextInput
 from kivy.utils import get_color_from_hex, platform
 
 from data_store import (
+    DEFAULT_GEMINI_API_KEY,
     DataStore,
     analyze_deck,
     calculate_full_stats,
@@ -990,7 +991,7 @@ class AddCardsScreen(ManaVaultScreen):
             self.feedback_label.color = COLOR_WARNING
             return
 
-        self.feedback_label.text = "🔍 Analisando foto e identificando carta oficial..."
+        self.feedback_label.text = "🔮 IA Visual identificando carta oficial pela foto..."
         self.feedback_label.color = COLOR_ACCENT
 
         def worker():
@@ -1029,7 +1030,7 @@ class AddCardsScreen(ManaVaultScreen):
 
                 self.suggestions_box.clear_widgets()
                 display_title = f"{card_name} ({printed_name})" if printed_name and printed_name != card_name else card_name
-                self.feedback_label.text = f"✓ Carta identificada: {display_title}! Atributos preenchidos."
+                self.feedback_label.text = f"✓ Carta identificada pela IA: {display_title}! Atributos preenchidos."
                 self.feedback_label.color = COLOR_SUCCESS
             elif best_text:
                 self.name_input.text = best_text
@@ -2333,7 +2334,8 @@ class ManaVaultApp(App):
                 pass
 
     def get_gemini_key(self):
-        return str(self.store.data.get("gemini_api_key", "")).strip()
+        k = str(self.store.data.get("gemini_api_key", "")).strip()
+        return k or DEFAULT_GEMINI_API_KEY
 
     def set_gemini_key(self, key):
         self.store.data["gemini_api_key"] = str(key or "").strip()

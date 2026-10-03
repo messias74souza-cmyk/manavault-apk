@@ -53,6 +53,28 @@ jobs:
           git clone -b develop --single-branch https://github.com/kivy/python-for-android.git android_app/.buildozer/android/platform/python-for-android
           sed -i 's|"lib/clang/\*/lib/linux"|"lib*/clang/\*/lib/linux"|g' android_app/.buildozer/android/platform/python-for-android/pythonforandroid/recipes/libthorvg/__init__.py
 
+      - name: Setup persistent Android debug keystore
+        run: |
+          mkdir -p android_app/keystore
+          mkdir -p ~/.android
+          if [ -f android_app/keystore/debug.keystore ]; then
+            echo "Using existing repository keystore"
+            cp android_app/keystore/debug.keystore ~/.android/debug.keystore
+          else
+            echo "Generating fixed persistent keystore"
+            keytool -genkey -v -keystore android_app/keystore/debug.keystore \
+              -alias androiddebugkey -storepass android -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=ManaVault Debug,O=ManaVault,C=BR"
+            cp android_app/keystore/debug.keystore ~/.android/debug.keystore
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add android_app/keystore/debug.keystore
+            git commit -m "chore: save permanent debug keystore for seamless updates" || true
+            git pull --rebase origin main || true
+            git push origin main || true
+          fi
+
       - name: Build debug APK
         working-directory: android_app
         env:
@@ -72,9 +94,9 @@ jobs:
         if: success()
         with:
           files: android_app/bin/*.apk
-          tag_name: v1.11.0
-          name: "ManaVault Android APK v1.11.0"
-          body: "Arquivo APK do ManaVault com foco centralizado no nome (Center-Focus Crop), eliminação rigorosa de texto de regras/habilidades/ilustrador, Google ML Kit nativo e catálogo offline."
+          tag_name: v1.12.0
+          name: "ManaVault Android APK v1.12.0"
+          body: "Arquivo APK do ManaVault com IA Multimodal Gemini Vision integrada por padrão para identificação instantânea de cartas por foto, modelos ultrarrápidos e chave de API pré-configurada."
           draft: false
           prerelease: false
         env:

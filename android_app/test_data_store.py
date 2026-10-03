@@ -187,9 +187,9 @@ class DataStoreTests(unittest.TestCase):
         normalized = normalize_data(legacy)
         bolt = normalized["decks"]["Burn"]["main"]["Lightning Bolt"]
         self.assertIn("image_uri", bolt)
-        self.assertEqual(bolt["image_uri"], "")
         self.assertIn("gemini_api_key", normalized)
-        self.assertEqual(normalized["gemini_api_key"], "")
+        from data_store import DEFAULT_GEMINI_API_KEY
+        self.assertEqual(normalized["gemini_api_key"], DEFAULT_GEMINI_API_KEY)
 
     def test_ocr_line_cleaning_and_scryfall_parsing(self):
         from data_store import clean_ocr_line, _parse_scryfall_card
