@@ -72,9 +72,9 @@ jobs:
         if: success()
         with:
           files: android_app/bin/*.apk
-          tag_name: v1.9.0
-          name: "ManaVault Android APK v1.9.0"
-          body: "Arquivo APK do ManaVault com catálogo offline embutido de cartas (PT/EN), autocompletar instantâneo, correção de câmera nativa e compatibilidade SSL Android."
+          tag_name: v1.10.0
+          name: "ManaVault Android APK v1.10.0"
+          body: "Arquivo APK do ManaVault com Google ML Kit Text Recognition nativo, recorte automático da faixa de título (Title-Bar Crop), motor de busca por similaridade (Fuzzy Matching) e catálogo offline."
           draft: false
           prerelease: false
         env:

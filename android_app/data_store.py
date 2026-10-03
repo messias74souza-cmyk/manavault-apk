@@ -249,8 +249,77 @@ def get_card_catalog():
     return _CACHED_CATALOG
 
 
+def card_similarity(q, target):
+    """Calcula similaridade textual considerando correspondência total e prefixo."""
+    import difflib
+    if not q or not target:
+        return 0.0
+    full = difflib.SequenceMatcher(None, q, target).ratio()
+    if len(q) >= 4 and len(target) >= 4:
+        min_len = min(len(q), len(target))
+        if min_len >= int(0.65 * max(len(q), len(target))):
+            prefix = difflib.SequenceMatcher(None, q[:min_len], target[:min_len]).ratio()
+            return max(full, prefix * 0.94)
+    return full
+
+
+def fuzzy_find_in_catalog_or_decks(query, decks=None, threshold=0.72):
+    """Localiza carta por similaridade de texto no catálogo offline ou decks (tolerante a erros de OCR)."""
+    q_clean = clean_ocr_line(query)
+    q_norm = normalize_keyword_search(q_clean).strip()
+    if len(q_norm) < 3:
+        return None, 0.0
+
+    catalog = get_card_catalog()
+    best_score = 0.0
+    best_card = None
+
+    # 1. Catálogo offline embutido
+    for k, info in catalog.items():
+        k_norm = normalize_keyword_search(k)
+        s = card_similarity(q_norm, k_norm)
+        if s > best_score:
+            best_score = s
+            best_card = info
+
+        alt = info.get("alt_name", "")
+        if alt:
+            alt_norm = normalize_keyword_search(alt)
+            s_alt = card_similarity(q_norm, alt_norm)
+            if s_alt > best_score:
+                best_score = s_alt
+                best_card = info
+
+    # 2. Decks cadastrados pelo usuário
+    if isinstance(decks, dict):
+        for d_name, d_content in decks.items():
+            if not isinstance(d_content, dict):
+                continue
+            for sec in ("main", "side"):
+                for c_name, c_info in d_content.get(sec, {}).items():
+                    c_norm = normalize_keyword_search(c_name)
+                    s_c = card_similarity(q_norm, c_norm)
+                    if s_c > best_score:
+                        best_score = s_c
+                        if isinstance(c_info, dict):
+                            best_card = {
+                                "name": c_name,
+                                "alt_name": "",
+                                "cmc": int(c_info.get("cmc", 0) or 0),
+                                "color": str(c_info.get("color", "C")),
+                                "type": str(c_info.get("type", "Outros")),
+                                "image_url": str(c_info.get("image_uri", "")),
+                            }
+                        else:
+                            best_card = {"name": c_name, "alt_name": "", "cmc": 0, "color": "C", "type": "Outros", "image_url": ""}
+
+    if best_score >= threshold and best_card is not None:
+        return best_card, best_score
+    return None, best_score
+
+
 def search_card_database(query, decks=None, limit=6):
-    """Busca cartas no catálogo offline e nos decks cadastrados (retorna sugestões instantâneas)."""
+    """Busca cartas no catálogo offline e nos decks cadastrados (retorna sugestões instantâneas com fuzzy)."""
     q_norm = normalize_keyword_search(query).strip()
     if not q_norm:
         return []
@@ -259,6 +328,7 @@ def search_card_database(query, decks=None, limit=6):
     exact = []
     starts = []
     contains = []
+    fuzzy = []
 
     # 1. Catálogo offline embutido
     for k, info in catalog.items():
@@ -273,6 +343,12 @@ def search_card_database(query, decks=None, limit=6):
             starts.append(info)
         elif q_norm in k_norm or (alt_norm and q_norm in alt_norm):
             contains.append(info)
+        elif len(q_norm) >= 3:
+            s1 = card_similarity(q_norm, k_norm)
+            s2 = card_similarity(q_norm, alt_norm) if alt_norm else 0
+            best_s = max(s1, s2)
+            if best_s >= 0.72:
+                fuzzy.append((best_s, info))
 
     # 2. Decks cadastrados pelo usuário
     if isinstance(decks, dict):
@@ -300,7 +376,10 @@ def search_card_database(query, decks=None, limit=6):
                     elif q_norm in c_norm:
                         contains.append(card_obj)
 
-    results = exact + starts + contains
+    fuzzy.sort(key=lambda item: item[0], reverse=True)
+    fuzzy_cards = [item[1] for item in fuzzy]
+
+    results = exact + starts + contains + fuzzy_cards
     seen = set()
     dedup = []
     for r in results:
@@ -314,10 +393,13 @@ def search_card_database(query, decks=None, limit=6):
 
 
 def find_card_in_catalog_or_decks(card_name, decks=None):
-    """Encontra carta no catálogo offline ou nos decks por correspondência exata ou inicial."""
+    """Encontra carta no catálogo offline ou nos decks por correspondência exata, inicial ou fuzzy."""
     results = search_card_database(card_name, decks=decks, limit=1)
     if results:
         return results[0]
+    fuzzy_match, score = fuzzy_find_in_catalog_or_decks(card_name, decks=decks, threshold=0.74)
+    if fuzzy_match:
+        return fuzzy_match
     return None
 
 
@@ -434,6 +516,107 @@ def clean_ocr_line(line):
     """Remove caracteres especiais preservando letras acentuadas e nomes de cartas."""
     cleaned = re.sub(r"[^a-zA-Z0-9\s,\'’\-áéíóúâêîôûãõçÁÉÍÓÚÂÊÎÔÛÃÕÇ]", "", str(line or "")).strip()
     return cleaned
+
+
+def clean_ocr_card_title(line):
+    """Limpa a linha de texto lida pelo OCR, removendo custos de mana ou números de rodapé."""
+    clean = clean_ocr_line(line)
+    # Remove sufixos como custos de mana ex: "Lightning Bolt 1R", "Raio 1", "Sol Ring 1"
+    stripped = re.sub(r"\s*\{?[0-9WUBRGXwubrgx/]+\}?$", "", clean).strip()
+    return stripped if len(stripped) >= 3 else clean
+
+
+def crop_title_bar(image_path):
+    """Gera recorte da faixa superior da carta (onde fica o título) para foco máximo do OCR."""
+    if not image_path or not Path(image_path).is_file():
+        return None
+
+    crop_target = Path(image_path).parent / f"crop_title_{Path(image_path).name}"
+
+    # 1. Tentativa via Android BitmapFactory (nativo no celular Android)
+    try:
+        from jnius import autoclass
+        BitmapFactory = autoclass("android.graphics.BitmapFactory")
+        Bitmap = autoclass("android.graphics.Bitmap")
+        FileOutputStream = autoclass("java.io.FileOutputStream")
+        CompressFormat = autoclass("android.graphics.Bitmap$CompressFormat")
+
+        original = BitmapFactory.decodeFile(str(image_path))
+        if original is not None:
+            w = int(original.getWidth())
+            h = int(original.getHeight())
+            crop_h = max(int(h * 0.26), 80)
+            cropped = Bitmap.createBitmap(original, 0, 0, w, crop_h)
+            original.recycle()
+
+            fos = FileOutputStream(str(crop_target))
+            cropped.compress(CompressFormat.JPEG, 92, fos)
+            fos.flush()
+            fos.close()
+            cropped.recycle()
+            if crop_target.is_file() and crop_target.stat().st_size > 0:
+                return str(crop_target)
+    except Exception:
+        pass
+
+    # 2. Tentativa via PIL (ambiente desktop ou testes)
+    try:
+        from PIL import Image
+        with Image.open(image_path) as img:
+            w, h = img.size
+            crop_h = max(int(h * 0.26), 80)
+            cropped = img.crop((0, 0, w, crop_h))
+            cropped.save(str(crop_target), "JPEG", quality=92)
+            if crop_target.is_file() and crop_target.stat().st_size > 0:
+                return str(crop_target)
+    except Exception:
+        pass
+
+    return str(image_path)
+
+
+def mlkit_recognize_text(image_path):
+    """Reconhece texto na imagem usando Google ML Kit Text Recognition nativo (Offline, Rápido, Ilimitado)."""
+    if not image_path or not Path(image_path).is_file():
+        return []
+
+    try:
+        from jnius import autoclass
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        currentActivity = PythonActivity.mActivity
+
+        TextRecognition = autoclass("com.google.mlkit.vision.text.TextRecognition")
+        TextRecognizerOptions = autoclass("com.google.mlkit.vision.text.latin.TextRecognizerOptions")
+        InputImage = autoclass("com.google.mlkit.vision.common.InputImage")
+        Tasks = autoclass("com.google.android.gms.tasks.Tasks")
+        Uri = autoclass("android.net.Uri")
+        File = autoclass("java.io.File")
+
+        recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        j_file = File(str(image_path))
+        uri = Uri.fromFile(j_file)
+        input_image = InputImage.fromFilePath(currentActivity, uri)
+
+        task = recognizer.process(input_image)
+        vision_text = getattr(Tasks, "await")(task)
+
+        lines_with_pos = []
+        blocks = vision_text.getTextBlocks()
+        for i in range(blocks.size()):
+            block = blocks.get(i)
+            lines = block.getLines()
+            for j in range(lines.size()):
+                line = lines.get(j)
+                txt = str(line.getText() or "").strip()
+                box = line.getBoundingBox()
+                top_y = int(box.top) if box is not None else 999999
+                if txt and len(txt) >= 2:
+                    lines_with_pos.append((top_y, txt))
+
+        lines_with_pos.sort(key=lambda item: item[0])
+        return [item[1] for item in lines_with_pos]
+    except Exception:
+        return []
 
 
 def scale_image_for_ocr(image_path, max_dim=1200):
@@ -555,47 +738,78 @@ def identify_card_with_gemini(api_key, image_bytes):
 
 
 def identify_card_from_photo(image_path, gemini_api_key=None, decks=None):
-    """Fluxo completo: extrai candidatos via OCR e consulta primeiro o catálogo offline, depois Scryfall."""
-    image_bytes = scale_image_for_ocr(image_path)
-    if not image_bytes:
+    """Fluxo completo: recorte de faixa de título, Google ML Kit on-device, OCR e fuzzy matching."""
+    if not image_path or not Path(image_path).is_file():
         return None, ""
 
     # Se houver chave do Gemini configurada, tenta a IA visual primeiro
     if gemini_api_key:
-        card = identify_card_with_gemini(gemini_api_key, image_bytes)
-        if card:
-            return card, card["name"]
+        image_bytes = scale_image_for_ocr(image_path)
+        if image_bytes:
+            card = identify_card_with_gemini(gemini_api_key, image_bytes)
+            if card:
+                return card, card["name"]
 
-    # OCR integrado
-    raw_text = ocr_image_to_text(image_bytes)
-    if not raw_text:
-        return None, ""
-
-    lines = raw_text.splitlines()
     candidates = []
     ignored = {
         "creature", "instant", "sorcery", "enchantment", "artifact", "land", "planeswalker",
         "criatura", "mágica instantânea", "feitiço", "encantamento", "artefato", "terreno",
-        "wizards of the coast", "illustrator", "legendary", "lendária", "lendário"
+        "wizards of the coast", "illustrator", "legendary", "lendária", "lendário",
+        "magic the gathering", "deck", "mana"
     }
 
-    for line in lines:
-        cleaned = clean_ocr_line(line)
-        if len(cleaned) < 3:
-            continue
-        if cleaned.lower() in ignored:
-            continue
-        candidates.append(cleaned)
-        if len(candidates) >= 6:
-            break
+    # Recorte da faixa de título (primeiros ~26% da carta)
+    crop_path = crop_title_bar(image_path)
 
-    # 1. Verifica candidatos no catálogo offline (instantâneo!)
+    # 1. Tentativa com Google ML Kit nativo no recorte da faixa de título
+    if crop_path and crop_path != str(image_path):
+        ml_crop_lines = mlkit_recognize_text(crop_path)
+        for line in ml_crop_lines:
+            c = clean_ocr_card_title(line)
+            if len(c) >= 3 and c.lower() not in ignored and c not in candidates:
+                candidates.append(c)
+
+    # 2. Se a faixa de título não trouxe candidatos ou ML Kit não rodou nela, tenta ML Kit na imagem completa
+    if not candidates:
+        ml_full_lines = mlkit_recognize_text(image_path)
+        for line in ml_full_lines:
+            c = clean_ocr_card_title(line)
+            if len(c) >= 3 and c.lower() not in ignored and c not in candidates:
+                candidates.append(c)
+
+    # 3. Fallback: Se o Google ML Kit não detectou texto (ex: desktop ou aparelho sem Play Services), usa OCR em nuvem
+    if not candidates:
+        ocr_target = crop_path if (crop_path and Path(crop_path).is_file()) else str(image_path)
+        ocr_bytes = scale_image_for_ocr(ocr_target)
+        raw_text = ocr_image_to_text(ocr_bytes) if ocr_bytes else ""
+        if not raw_text and ocr_target != str(image_path):
+            ocr_bytes = scale_image_for_ocr(image_path)
+            raw_text = ocr_image_to_text(ocr_bytes) if ocr_bytes else ""
+
+        if raw_text:
+            for line in raw_text.splitlines():
+                c = clean_ocr_card_title(line)
+                if len(c) >= 3 and c.lower() not in ignored and c not in candidates:
+                    candidates.append(c)
+                if len(candidates) >= 8:
+                    break
+
+    if not candidates:
+        return None, ""
+
+    # A) Correspondência exata ou inicial no catálogo offline / decks
     for cand in candidates:
         local_card = find_card_in_catalog_or_decks(cand, decks=decks)
         if local_card:
             return local_card, cand
 
-    # 2. Se não achou localmente, tenta Scryfall online
+    # B) Correspondência por Similaridade (Fuzzy Matching tolerante a pequenos erros de OCR)
+    for cand in candidates:
+        fuzzy_card, score = fuzzy_find_in_catalog_or_decks(cand, decks=decks, threshold=0.72)
+        if fuzzy_card:
+            return fuzzy_card, cand
+
+    # C) Consulta online na Scryfall (com fuzzy matching)
     for cand in candidates:
         card = fetch_scryfall_card_info(cand)
         if card:

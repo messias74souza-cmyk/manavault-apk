@@ -1031,11 +1031,13 @@ class AddCardsScreen(ManaVaultScreen):
                 self.feedback_label.color = COLOR_SUCCESS
             elif best_text:
                 self.name_input.text = best_text
-                self.suggestions_box.clear_widgets()
-                self.feedback_label.text = f"Texto lido: '{best_text}'. Verifique ou toque em Buscar."
+                self._suppress_suggestions = False
+                self.on_name_text_changed(None, best_text)
+                self.feedback_label.text = f"Texto lido: '{best_text}'. Toque na sugestão abaixo ou em Buscar."
                 self.feedback_label.color = COLOR_WARNING
             else:
-                self.feedback_label.text = "Não foi possível ler a carta na foto. Tente uma foto mais nítida com boa iluminação."
+                self.suggestions_box.clear_widgets()
+                self.feedback_label.text = "Não foi possível ler o nome da carta. Centralize a faixa superior e tente novamente."
                 self.feedback_label.color = COLOR_WARNING
         finally:
             self._suppress_suggestions = False

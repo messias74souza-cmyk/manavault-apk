@@ -233,6 +233,42 @@ class DataStoreTests(unittest.TestCase):
         self.assertEqual(defaults["color"], "C")
         self.assertEqual(defaults["type"], "Artefato")
 
+    def test_fuzzy_matching_and_title_cleaning(self):
+        from data_store import (
+            clean_ocr_card_title,
+            card_similarity,
+            fuzzy_find_in_catalog_or_decks,
+            find_card_in_catalog_or_decks,
+        )
+
+        # 1. Title cleaning
+        self.assertEqual(clean_ocr_card_title("Lightning Bolt {1}{R}"), "Lightning Bolt")
+        self.assertEqual(clean_ocr_card_title("Raio 1"), "Raio")
+        self.assertEqual(clean_ocr_card_title("Sol Ring 1"), "Sol Ring")
+
+        # 2. Similarity calculation
+        self.assertTrue(card_similarity("ralo", "raio") >= 0.75)
+        self.assertTrue(card_similarity("ane1 so1ar", "anel solar") >= 0.80)
+        self.assertTrue(card_similarity("banana", "anel solar") < 0.65)
+
+        # 3. Fuzzy search in catalog for cards with typical OCR errors
+        m1, s1 = fuzzy_find_in_catalog_or_decks("Ralo")
+        self.assertIsNotNone(m1)
+        self.assertEqual(m1["name"], "Raio")
+
+        m2, s2 = fuzzy_find_in_catalog_or_decks("Ane1 So1ar")
+        self.assertIsNotNone(m2)
+        self.assertEqual(m2["name"], "Anel Solar")
+
+        m3, s3 = fuzzy_find_in_catalog_or_decks("Cascave1 do rio listrada")
+        self.assertIsNotNone(m3)
+        self.assertEqual(m3["name"], "Cascavel-do-rio Listrada")
+
+        # 4. find_card_in_catalog_or_decks uses fuzzy fallback
+        found = find_card_in_catalog_or_decks("Lightn1ng Bo1t")
+        self.assertIsNotNone(found)
+        self.assertIn(found["name"], ["Lightning Bolt", "Raio"])
+
 
 if __name__ == "__main__":
     unittest.main()

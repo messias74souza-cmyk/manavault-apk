@@ -15,10 +15,16 @@ source.dir = .
 source.include_exts = py,json
 
 # (str) Application version
-version = 1.9.0
+version = 1.10.0
 
 # (list) Application requirements
 requirements = python3,kivy,androidstorage4kivy
+
+# (list) Gradle dependencies to add
+android.gradle_dependencies = com.google.mlkit:text-recognition:16.0.1
+
+# (bool) Enable AndroidX support
+android.enable_androidx = True
 
 # (str) Supported orientation (one of landscape, portrait or all)
 orientation = portrait
