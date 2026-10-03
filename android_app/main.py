@@ -722,6 +722,8 @@ class AddCardsScreen(ManaVaultScreen):
         self.image_preview_container.add_widget(self.no_image_lbl)
         c_photo.add_widget(self.image_preview_container)
 
+        c_photo.add_widget(make_label("🎯 Dica: Aproxime a câmera e posicione o NOME bem no MEIO da foto!", height=22, font_size=11, bold=True, color=COLOR_ACCENT))
+
         # Botões de Ação da Foto
         photo_btn_row1 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         photo_btn_row1.add_widget(make_button("📸  Tirar Foto (Câmera)", self.take_photo_camera, color=COLOR_ACCENT, height=40, font_size=12))

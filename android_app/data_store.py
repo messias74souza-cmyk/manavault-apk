@@ -526,14 +526,59 @@ def clean_ocr_card_title(line):
     return stripped if len(stripped) >= 3 else clean
 
 
-def crop_title_bar(image_path):
-    """Gera recorte da faixa superior da carta (onde fica o título) para foco máximo do OCR."""
+NON_NAME_PATTERNS = [
+    r"^\d+/\d+$",                 # Power/Toughness: 1/1, 2/2, 4/5
+    r"^\d+\s*$",                  # Apenas números
+    r"illus\.?", r"illustrated",  # Ilustrador
+    r"ilustrado\s+por",
+    r"wizards\s+of\s+the\s+coast",
+    r"tm\s*&\s*\(c\)",
+    r"not\s+for\s+sale",
+    r"^\s*([WUBRG0-9/\{\}]+\s*)+$", # Apenas mana ou símbolos soltos
+]
+
+RAW_NON_NAME_KEYWORDS = [
+    "creature", "instant", "sorcery", "enchantment", "artifact", "land", "planeswalker",
+    "criatura", "magica", "instantanea", "feitico", "encantamento", "artefato", "terreno",
+    "lendaria", "lendario", "legendary",
+    "voar", "flying", "iniciativa", "first", "strike", "vigilancia", "vigilance",
+    "atropelar", "trample", "lampejo", "flash", "impeto", "haste", "toque", "mortifero", "deathtouch",
+    "vinculo", "vida", "lifelink", "alcance", "reach", "ameacar", "menace",
+    "virar", "vire", "tap", "desvirar", "untap", "comprar", "compre", "draw", "descarte", "discard",
+    "campo", "batalha", "battlefield", "cemiterio", "graveyard", "exilio", "exile",
+    "deck", "grimorio", "library", "damage", "dano", "mana", "target", "alvo",
+    "jogador", "player", "custo", "cost", "whenever", "quando", "sacrifice", "sacrifique",
+    "destroy", "destrua", "counter", "anule", "enter", "enters", "entra", "entram",
+    "adicione", "adiciona", "cause", "causes", "equal", "igual", "power", "poder", "toughness", "resistencia",
+]
+NON_NAME_KEYWORDS = {normalize_keyword_search(w) for w in RAW_NON_NAME_KEYWORDS}
+
+
+def is_non_name_line(text):
+    """Determina se a linha lida é texto de regras, tipo, ilustrador ou números e NÃO o nome."""
+    t_clean = normalize_keyword_search(text)
+    if len(t_clean) < 3:
+        return True
+    for pat in NON_NAME_PATTERNS:
+        if re.search(pat, t_clean):
+            return True
+    words = re.findall(r"\b\w+\b", t_clean)
+    if not words:
+        return True
+    kw_hits = sum(1 for w in words if w in NON_NAME_KEYWORDS)
+    if kw_hits > 0 and (kw_hits / len(words)) >= 0.35:
+        return True
+    return False
+
+
+def crop_image_region(image_path, y_pct_start, y_pct_end, x_pct_start=0.04, x_pct_end=0.96, suffix="_crop"):
+    """Recorta uma região específica da foto (suporta Android Bitmap nativo e PIL no desktop)."""
     if not image_path or not Path(image_path).is_file():
         return None
 
-    crop_target = Path(image_path).parent / f"crop_title_{Path(image_path).name}"
+    crop_target = Path(image_path).parent / f"{Path(image_path).stem}{suffix}.jpg"
 
-    # 1. Tentativa via Android BitmapFactory (nativo no celular Android)
+    # 1. Android BitmapFactory nativo
     try:
         from jnius import autoclass
         BitmapFactory = autoclass("android.graphics.BitmapFactory")
@@ -545,12 +590,17 @@ def crop_title_bar(image_path):
         if original is not None:
             w = int(original.getWidth())
             h = int(original.getHeight())
-            crop_h = max(int(h * 0.26), 80)
-            cropped = Bitmap.createBitmap(original, 0, 0, w, crop_h)
+
+            x = max(0, int(w * x_pct_start))
+            y = max(0, int(h * y_pct_start))
+            cw = min(w - x, max(80, int(w * (x_pct_end - x_pct_start))))
+            ch = min(h - y, max(60, int(h * (y_pct_end - y_pct_start))))
+
+            cropped = Bitmap.createBitmap(original, x, y, cw, ch)
             original.recycle()
 
             fos = FileOutputStream(str(crop_target))
-            cropped.compress(CompressFormat.JPEG, 92, fos)
+            cropped.compress(CompressFormat.JPEG, 94, fos)
             fos.flush()
             fos.close()
             cropped.recycle()
@@ -559,20 +609,38 @@ def crop_title_bar(image_path):
     except Exception:
         pass
 
-    # 2. Tentativa via PIL (ambiente desktop ou testes)
+    # 2. PIL fallback (desktop / testes)
     try:
         from PIL import Image
         with Image.open(image_path) as img:
             w, h = img.size
-            crop_h = max(int(h * 0.26), 80)
-            cropped = img.crop((0, 0, w, crop_h))
-            cropped.save(str(crop_target), "JPEG", quality=92)
+            x0 = int(w * x_pct_start)
+            y0 = int(h * y_pct_start)
+            x1 = int(w * x_pct_end)
+            y1 = int(h * y_pct_end)
+            cropped = img.crop((x0, y0, x1, y1))
+            cropped.save(str(crop_target), "JPEG", quality=94)
             if crop_target.is_file() and crop_target.stat().st_size > 0:
                 return str(crop_target)
     except Exception:
         pass
 
     return str(image_path)
+
+
+def crop_name_center(image_path):
+    """Recorta a faixa central da foto (onde o usuário enquadra o nome bem no meio)."""
+    return crop_image_region(image_path, 0.28, 0.72, 0.04, 0.96, suffix="_crop_center")
+
+
+def crop_name_top(image_path):
+    """Recorta a faixa superior da foto (quando o card inteiro é fotografado)."""
+    return crop_image_region(image_path, 0.02, 0.24, 0.04, 0.84, suffix="_crop_top")
+
+
+def crop_title_bar(image_path):
+    """Alias para compatibilidade anterior: retorna recorte superior."""
+    return crop_name_top(image_path)
 
 
 def mlkit_recognize_text(image_path):
@@ -738,7 +806,7 @@ def identify_card_with_gemini(api_key, image_bytes):
 
 
 def identify_card_from_photo(image_path, gemini_api_key=None, decks=None):
-    """Fluxo completo: recorte de faixa de título, Google ML Kit on-device, OCR e fuzzy matching."""
+    """Fluxo completo: foco central (Center-Focus Crop), faixa superior, eliminação de texto irrelevante e fuzzy matching."""
     if not image_path or not Path(image_path).is_file():
         return None, ""
 
@@ -751,47 +819,43 @@ def identify_card_from_photo(image_path, gemini_api_key=None, decks=None):
                 return card, card["name"]
 
     candidates = []
-    ignored = {
-        "creature", "instant", "sorcery", "enchantment", "artifact", "land", "planeswalker",
-        "criatura", "mágica instantânea", "feitiço", "encantamento", "artefato", "terreno",
-        "wizards of the coast", "illustrator", "legendary", "lendária", "lendário",
-        "magic the gathering", "deck", "mana"
-    }
 
-    # Recorte da faixa de título (primeiros ~26% da carta)
-    crop_path = crop_title_bar(image_path)
+    def add_candidate(raw_text):
+        if not raw_text:
+            return
+        cleaned = clean_ocr_card_title(raw_text)
+        if len(cleaned) >= 3 and not is_non_name_line(cleaned):
+            if cleaned not in candidates:
+                candidates.append(cleaned)
 
-    # 1. Tentativa com Google ML Kit nativo no recorte da faixa de título
-    if crop_path and crop_path != str(image_path):
-        ml_crop_lines = mlkit_recognize_text(crop_path)
-        for line in ml_crop_lines:
-            c = clean_ocr_card_title(line)
-            if len(c) >= 3 and c.lower() not in ignored and c not in candidates:
-                candidates.append(c)
+    # 1. FOCO NO CENTRO: O usuário aproximou a câmera com o NOME da carta no meio da foto!
+    crop_center = crop_name_center(image_path)
+    if crop_center and crop_center != str(image_path):
+        lines_center = mlkit_recognize_text(crop_center)
+        for line in lines_center:
+            add_candidate(line)
 
-    # 2. Se a faixa de título não trouxe candidatos ou ML Kit não rodou nela, tenta ML Kit na imagem completa
+    # 2. FOCO NO TOPO: Caso tenha fotografado a carta inteira, busca na faixa superior
+    crop_top = crop_name_top(image_path)
+    if crop_top and crop_top != str(image_path):
+        lines_top = mlkit_recognize_text(crop_top)
+        for line in lines_top:
+            add_candidate(line)
+
+    # 3. IMAGEM COMPLETA com Google ML Kit (ordena linhas do topo para a base)
+    lines_full = mlkit_recognize_text(image_path)
+    for line in lines_full:
+        add_candidate(line)
+
+    # 4. FALLBACK EM NUVEM (caso o ML Kit não tenha retornado nada, ex: desktop ou falha nativa)
     if not candidates:
-        ml_full_lines = mlkit_recognize_text(image_path)
-        for line in ml_full_lines:
-            c = clean_ocr_card_title(line)
-            if len(c) >= 3 and c.lower() not in ignored and c not in candidates:
-                candidates.append(c)
-
-    # 3. Fallback: Se o Google ML Kit não detectou texto (ex: desktop ou aparelho sem Play Services), usa OCR em nuvem
-    if not candidates:
-        ocr_target = crop_path if (crop_path and Path(crop_path).is_file()) else str(image_path)
-        ocr_bytes = scale_image_for_ocr(ocr_target)
-        raw_text = ocr_image_to_text(ocr_bytes) if ocr_bytes else ""
-        if not raw_text and ocr_target != str(image_path):
-            ocr_bytes = scale_image_for_ocr(image_path)
-            raw_text = ocr_image_to_text(ocr_bytes) if ocr_bytes else ""
-
-        if raw_text:
-            for line in raw_text.splitlines():
-                c = clean_ocr_card_title(line)
-                if len(c) >= 3 and c.lower() not in ignored and c not in candidates:
-                    candidates.append(c)
-                if len(candidates) >= 8:
+        for target in [crop_center, crop_top, str(image_path)]:
+            if target and Path(target).is_file():
+                raw = ocr_image_to_text(scale_image_for_ocr(target))
+                if raw:
+                    for line in raw.splitlines():
+                        add_candidate(line)
+                if candidates:
                     break
 
     if not candidates:
@@ -805,7 +869,7 @@ def identify_card_from_photo(image_path, gemini_api_key=None, decks=None):
 
     # B) Correspondência por Similaridade (Fuzzy Matching tolerante a pequenos erros de OCR)
     for cand in candidates:
-        fuzzy_card, score = fuzzy_find_in_catalog_or_decks(cand, decks=decks, threshold=0.72)
+        fuzzy_card, score = fuzzy_find_in_catalog_or_decks(cand, decks=decks, threshold=0.70)
         if fuzzy_card:
             return fuzzy_card, cand
 
