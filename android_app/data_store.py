@@ -690,13 +690,17 @@ def mlkit_recognize_text(image_path):
         return []
 
 
-def scale_image_for_ocr(image_path, max_dim=1200):
-    """Redimensiona a foto para envio leve e rápido para OCR (usa Android BitmapFactory nativo se disponível)."""
+def scale_image_for_ocr(image_path, max_dim=1000):
+    """Redimensiona a foto para envio leve e rápido (usa Android BitmapFactory e FileOutputStream nativo)."""
+    if not image_path or not Path(image_path).is_file():
+        return b""
+
+    # 1. Android nativo via BitmapFactory e FileOutputStream
     try:
         from jnius import autoclass
         BitmapFactory = autoclass("android.graphics.BitmapFactory")
         BitmapFactoryOptions = autoclass("android.graphics.BitmapFactory$Options")
-        ByteArrayOutputStream = autoclass("java.io.ByteArrayOutputStream")
+        FileOutputStream = autoclass("java.io.FileOutputStream")
         CompressFormat = autoclass("android.graphics.Bitmap$CompressFormat")
 
         options = BitmapFactoryOptions()
@@ -712,15 +716,39 @@ def scale_image_for_ocr(image_path, max_dim=1200):
         options.inSampleSize = sample_size
         bmp = BitmapFactory.decodeFile(str(image_path), options)
         if bmp:
-            bos = ByteArrayOutputStream()
-            bmp.compress(CompressFormat.JPEG, 80, bos)
-            raw_bytes = bytes(bos.toByteArray())
+            temp_scaled = Path(image_path).parent / f"scaled_{Path(image_path).name}.jpg"
+            fos = FileOutputStream(str(temp_scaled))
+            bmp.compress(CompressFormat.JPEG, 82, fos)
+            fos.flush()
+            fos.close()
             bmp.recycle()
-            if raw_bytes:
-                return raw_bytes
+            if temp_scaled.is_file() and temp_scaled.stat().st_size > 0:
+                raw_bytes = temp_scaled.read_bytes()
+                try:
+                    temp_scaled.unlink()
+                except Exception:
+                    pass
+                if raw_bytes:
+                    return raw_bytes
     except Exception:
         pass
 
+    # 2. PIL fallback (desktop / testes)
+    try:
+        from PIL import Image
+        import io
+        with Image.open(image_path) as img:
+            img = img.convert("RGB")
+            img.thumbnail((max_dim, max_dim))
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=82)
+            val = buf.getvalue()
+            if val:
+                return val
+    except Exception:
+        pass
+
+    # 3. Fallback raw bytes
     try:
         return Path(image_path).read_bytes()
     except Exception:
@@ -796,16 +824,15 @@ def identify_card_with_gemini(api_key, image_bytes):
                 text = res["candidates"][0]["content"]["parts"][0]["text"]
                 parsed = json.loads(text)
                 if parsed.get("name"):
-                    card_scryfall = fetch_scryfall_card_info(parsed["name"])
-                    if card_scryfall:
-                        return card_scryfall
+                    # Retorna os atributos detectados diretamente pela visão do Gemini
                     return {
-                        "name": parsed["name"],
-                        "printed_name": parsed.get("printed_name", ""),
-                        "cmc": int(parsed.get("cmc", 0)),
-                        "color": str(parsed.get("color", "C")),
-                        "type": str(parsed.get("type", "Outros")),
+                        "name": str(parsed["name"]).strip(),
+                        "printed_name": str(parsed.get("printed_name", "")).strip(),
+                        "cmc": int(parsed.get("cmc", 0) or 0),
+                        "color": str(parsed.get("color", "C")).strip(),
+                        "type": str(parsed.get("type", "Outros")).strip(),
                         "image_url": "",
+                        "source": "gemini",
                     }
         except Exception:
             continue
@@ -813,19 +840,20 @@ def identify_card_with_gemini(api_key, image_bytes):
 
 
 def identify_card_from_photo(image_path, gemini_api_key=None, decks=None):
-    """Fluxo completo: IA visual multimodal Gemini (prioritária), foco central, faixa superior e fuzzy matching."""
+    """Fluxo completo: IA visual Gemini PRIMEIRO. Se o Gemini não achar, testa Scryfall e catálogo offline."""
     if not image_path or not Path(image_path).is_file():
         return None, ""
 
-    # 1. IA Visual Gemini (Prioritária: enxerga a carta inteira, arte, borda e texto)
+    # 1. PRIORIDADE MÁXIMA: Pesquisa visual da foto pelo Gemini
     active_key = str(gemini_api_key or DEFAULT_GEMINI_API_KEY).strip()
     if active_key:
         image_bytes = scale_image_for_ocr(image_path)
         if image_bytes:
             card = identify_card_with_gemini(active_key, image_bytes)
-            if card:
+            if card and card.get("name"):
                 return card, card["name"]
 
+    # 2. SE O GEMINI NÃO ACHAR: Extrai candidatos de texto e testa Scryfall
     candidates = []
 
     def add_candidate(raw_text):
@@ -836,26 +864,21 @@ def identify_card_from_photo(image_path, gemini_api_key=None, decks=None):
             if cleaned not in candidates:
                 candidates.append(cleaned)
 
-    # 1. FOCO NO CENTRO: O usuário aproximou a câmera com o NOME da carta no meio da foto!
+    # A) Recorte central e superior
     crop_center = crop_name_center(image_path)
     if crop_center and crop_center != str(image_path):
-        lines_center = mlkit_recognize_text(crop_center)
-        for line in lines_center:
+        for line in mlkit_recognize_text(crop_center):
             add_candidate(line)
 
-    # 2. FOCO NO TOPO: Caso tenha fotografado a carta inteira, busca na faixa superior
     crop_top = crop_name_top(image_path)
     if crop_top and crop_top != str(image_path):
-        lines_top = mlkit_recognize_text(crop_top)
-        for line in lines_top:
+        for line in mlkit_recognize_text(crop_top):
             add_candidate(line)
 
-    # 3. IMAGEM COMPLETA com Google ML Kit (ordena linhas do topo para a base)
-    lines_full = mlkit_recognize_text(image_path)
-    for line in lines_full:
+    for line in mlkit_recognize_text(image_path):
         add_candidate(line)
 
-    # 4. FALLBACK EM NUVEM (caso o ML Kit não tenha retornado nada, ex: desktop ou falha nativa)
+    # Fallback OCR se ML Kit não detectou
     if not candidates:
         for target in [crop_center, crop_top, str(image_path)]:
             if target and Path(target).is_file():
@@ -866,26 +889,22 @@ def identify_card_from_photo(image_path, gemini_api_key=None, decks=None):
                 if candidates:
                     break
 
-    if not candidates:
-        return None, ""
+    # 3. Testar Scryfall primeiro com os candidatos de texto encontrados
+    for cand in candidates:
+        card = fetch_scryfall_card_info(cand)
+        if card:
+            return card, cand
 
-    # A) Correspondência exata ou inicial no catálogo offline / decks
+    # 4. Se não achar na Scryfall, testa catálogo local e histórico de decks
     for cand in candidates:
         local_card = find_card_in_catalog_or_decks(cand, decks=decks)
         if local_card:
             return local_card, cand
 
-    # B) Correspondência por Similaridade (Fuzzy Matching tolerante a pequenos erros de OCR)
     for cand in candidates:
         fuzzy_card, score = fuzzy_find_in_catalog_or_decks(cand, decks=decks, threshold=0.70)
         if fuzzy_card:
             return fuzzy_card, cand
-
-    # C) Consulta online na Scryfall (com fuzzy matching)
-    for cand in candidates:
-        card = fetch_scryfall_card_info(cand)
-        if card:
-            return card, cand
 
     best_text = candidates[0] if candidates else ""
     return None, best_text

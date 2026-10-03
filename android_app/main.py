@@ -732,8 +732,8 @@ class AddCardsScreen(ManaVaultScreen):
         c_photo.add_widget(photo_btn_row1)
 
         photo_btn_row2 = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(6))
-        photo_btn_row2.add_widget(make_button("🔍  Identificar da Foto", self.scan_current_photo, color=COLOR_SURFACE_2, height=36, font_size=11))
-        photo_btn_row2.add_widget(make_button("🌐  Buscar Arte Oficial", self.fetch_official_art, color=COLOR_SURFACE_2, height=36, font_size=11))
+        photo_btn_row2.add_widget(make_button("🔮  Identificar Foto (Gemini)", self.scan_current_photo, color=COLOR_ACCENT, height=36, font_size=11))
+        photo_btn_row2.add_widget(make_button("🌐  Buscar na Scryfall", self.fetch_official_art, color=COLOR_SURFACE_2, height=36, font_size=11))
         c_photo.add_widget(photo_btn_row2)
 
         photo_btn_row3 = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(6))
@@ -984,14 +984,14 @@ class AddCardsScreen(ManaVaultScreen):
             self.feedback_label.color = COLOR_DANGER
 
     def scan_current_photo(self, *_):
-        """Analisa a foto anexada à carta e busca os dados oficiais no catálogo offline ou Scryfall."""
+        """Pesquisa a carta na foto usando IA Gemini primeiro; se não achar, testa Scryfall."""
         photo_path = self.current_image_uri
         if not photo_path or not Path(photo_path).is_file():
             self.feedback_label.text = "Tire uma foto ou escolha da galeria primeiro para identificar."
             self.feedback_label.color = COLOR_WARNING
             return
 
-        self.feedback_label.text = "🔮 IA Visual identificando carta oficial pela foto..."
+        self.feedback_label.text = "🔮 Pesquisando foto com IA Gemini primeiro..."
         self.feedback_label.color = COLOR_ACCENT
 
         def worker():
@@ -1030,7 +1030,8 @@ class AddCardsScreen(ManaVaultScreen):
 
                 self.suggestions_box.clear_widgets()
                 display_title = f"{card_name} ({printed_name})" if printed_name and printed_name != card_name else card_name
-                self.feedback_label.text = f"✓ Carta identificada pela IA: {display_title}! Atributos preenchidos."
+                source_name = "IA Gemini" if card_info.get("source") == "gemini" else "Scryfall"
+                self.feedback_label.text = f"✓ Identificado pela {source_name}: {display_title}! Atributos preenchidos."
                 self.feedback_label.color = COLOR_SUCCESS
             elif best_text:
                 self.name_input.text = best_text
@@ -1040,7 +1041,7 @@ class AddCardsScreen(ManaVaultScreen):
                 self.feedback_label.color = COLOR_WARNING
             else:
                 self.suggestions_box.clear_widgets()
-                self.feedback_label.text = "Não foi possível ler o nome da carta. Centralize a faixa superior e tente novamente."
+                self.feedback_label.text = "Não foi possível identificar a carta pela foto nem pela Scryfall. Preencha manualmente ou tente outra foto."
                 self.feedback_label.color = COLOR_WARNING
         finally:
             self._suppress_suggestions = False
@@ -1236,6 +1237,8 @@ class AddCardsScreen(ManaVaultScreen):
     def try_autofill(self, *_):
         card_name = self.name_input.text.strip()
         if not card_name:
+            if self.current_image_uri and Path(self.current_image_uri).is_file():
+                self.scan_current_photo()
             return
         self.suggestions_box.clear_widgets()
         decks = self.app_ref.store.data.get("decks", {})
