@@ -41,6 +41,7 @@ from data_store import (
     DataStore,
     analyze_deck,
     calculate_full_stats,
+    calculate_mana_base_recommendation,
     check_deck_legality,
     empty_data,
     fetch_scryfall_card_info,
@@ -53,6 +54,7 @@ from data_store import (
     normalize_tags,
     parse_decklist_text,
     search_card_database,
+    simulate_sample_hand,
 )
 
 try:
@@ -130,6 +132,93 @@ def format_card_color(color_code):
     if names:
         return f"Multicolorida ({' / '.join(names)} - {raw})"
     return f"Outra ({raw})"
+
+
+MANA_COLOR_PALETTE = {
+    "W": {"name": "Branco", "bg": (0.94, 0.92, 0.78, 1.0), "fg": (0.1, 0.1, 0.1, 1.0), "border": (1.0, 0.98, 0.85, 1.0)},
+    "U": {"name": "Azul", "bg": (0.08, 0.45, 0.82, 1.0), "fg": (1.0, 1.0, 1.0, 1.0), "border": (0.2, 0.65, 1.0, 1.0)},
+    "B": {"name": "Preto", "bg": (0.28, 0.22, 0.35, 1.0), "fg": (1.0, 1.0, 1.0, 1.0), "border": (0.5, 0.45, 0.6, 1.0)},
+    "R": {"name": "Vermelho", "bg": (0.85, 0.22, 0.15, 1.0), "fg": (1.0, 1.0, 1.0, 1.0), "border": (1.0, 0.45, 0.35, 1.0)},
+    "G": {"name": "Verde", "bg": (0.12, 0.55, 0.25, 1.0), "fg": (1.0, 1.0, 1.0, 1.0), "border": (0.3, 0.8, 0.45, 1.0)},
+    "C": {"name": "Incolor", "bg": (0.42, 0.44, 0.48, 1.0), "fg": (1.0, 1.0, 1.0, 1.0), "border": (0.7, 0.72, 0.76, 1.0)},
+}
+
+
+def get_mtg_color_identity_title(colors):
+    raw = str(colors or "C").strip().upper()
+    if not raw or raw == "C":
+        return "⚪ Incolor (C) - Terrenos / Artefatos"
+    c_sorted = "".join(c for c in "WUBRG" if c in raw)
+    if not c_sorted:
+        return "⚪ Incolor (C)"
+    if c_sorted == "W": return "☀️ Branco (Mono-W)"
+    if c_sorted == "U": return "💧 Azul (Mono-U)"
+    if c_sorted == "B": return "💀 Preto (Mono-B)"
+    if c_sorted == "R": return "🔥 Vermelho (Mono-R)"
+    if c_sorted == "G": return "🌳 Verde (Mono-G)"
+    guilds = {
+        "WU": "Azorius (WU)",
+        "UB": "Dimir (UB)",
+        "BR": "Rakdos (BR)",
+        "RG": "Gruul (RG)",
+        "GW": "Selesnya (GW)",
+        "WB": "Orzhov (WB)",
+        "UR": "Izzet (UR)",
+        "BG": "Golgari (BG)",
+        "WR": "Boros (WR)",
+        "UG": "Simic (UG)",
+    }
+    if c_sorted in guilds:
+        return f"Multicolorida: {guilds[c_sorted]}"
+    trios = {
+        "WUB": "Esper (WUB)",
+        "UBR": "Grixis (UBR)",
+        "BRG": "Jund (BRG)",
+        "RGW": "Naya (RGW)",
+        "GWU": "Bant (GWU)",
+        "WBG": "Abzan (WBG)",
+        "URW": "Jeskai (URW)",
+        "BGU": "Sultai (BGU)",
+        "RWB": "Mardu (RWB)",
+        "GUR": "Temur (GUR)",
+    }
+    if c_sorted in trios:
+        return f"Multicolorida: {trios[c_sorted]}"
+    if len(c_sorted) == 5:
+        return "🌈 5 Cores (WUBRG)"
+    if len(c_sorted) == 4:
+        return f"Multicolorida: 4 Cores ({c_sorted})"
+    return f"Multicolorida ({c_sorted})"
+
+
+class _ManaColorShim:
+    """Shim para preservar chamadas legadas self.custom_color_input.text."""
+    def __init__(self, screen):
+        self.screen = screen
+    @property
+    def text(self):
+        return self.screen.get_mana_colors_string()
+    @text.setter
+    def text(self, val):
+        self.screen.set_mana_colors(val)
+
+
+class _ManaSpinnerShim:
+    """Shim para preservar chamadas legadas self.color_spinner.text."""
+    def __init__(self, screen):
+        self.screen = screen
+    @property
+    def text(self):
+        c = self.screen.get_mana_colors_string()
+        for opt_text, opt_code in COLOR_OPTIONS_MAP.items():
+            if opt_code == c:
+                return opt_text
+        return "Multicolorida (Duas ou mais cores)"
+    @text.setter
+    def text(self, val):
+        code = COLOR_OPTIONS_MAP.get(val)
+        if code and code != "MULTI":
+            self.screen.set_mana_colors(code)
 
 
 def result_from_score(score, fallback="Win"):
@@ -476,6 +565,7 @@ class DecksScreen(ManaVaultScreen):
         self.name_input = make_input("Ex: Izzet Murktide, Mono Red Burn, Tron...")
         create_card.add_widget(self.name_input)
         create_card.add_widget(make_button("Criar Deck", self.create_deck, color=COLOR_ACCENT, height=46, font_size=13))
+        create_card.add_widget(make_button("📋  Importar Deck de Texto (Arena / Moxfield)", self.open_import_deck_dialog, color=COLOR_SURFACE_2, height=44, font_size=12))
         self.content.add_widget(create_card)
 
         self.summary_badge = make_label("", height=24, font_size=12, color=COLOR_TEXT_MUTED, halign="center")
@@ -502,6 +592,55 @@ class DecksScreen(ManaVaultScreen):
             self.name_input.text = ""
             self.app_ref.set_status(f"Deck '{name}' criado com sucesso.")
             self.app_ref.refresh_all()
+
+    def open_import_deck_dialog(self, *_):
+        box = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
+        box.add_widget(make_label("Nome do Deck (ou detectado do comentário):", height=20, font_size=12, color=COLOR_TEXT_MUTED))
+        name_input = make_input("Ex: Izzet Murktide", self.name_input.text.strip() or "Novo Deck Importado", height=44)
+        box.add_widget(name_input)
+
+        box.add_widget(make_label("Cole a Decklist (Arena, Moxfield, MTGO ou LigaMagic):", height=20, font_size=12, color=COLOR_TEXT_MUTED))
+        text_input = make_input("4 Lightning Bolt\n4 Dragon's Rage Channeler\n18 Mountain\n\nSideboard\n2 Flusterstorm", multiline=True, height=160)
+        box.add_widget(text_input)
+
+        actions = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(10))
+        popup = Popup(title="Importar Decklist de Texto", content=box, size_hint=(0.92, 0.82))
+
+        def do_import(*_):
+            raw = text_input.text.strip()
+            if not raw:
+                self.app_ref.set_status("Cole o texto da decklist para importar.")
+                return
+            deck_name = name_input.text.strip() or "Deck Importado"
+            parsed = parse_decklist_text(raw, default_deck_name=deck_name)
+            target_name = parsed.get("deck_name") or deck_name
+
+            main_count = sum(c.get("qty", 1) for c in parsed.get("main", {}).values())
+            side_count = sum(c.get("qty", 1) for c in parsed.get("side", {}).values())
+
+            if main_count == 0 and side_count == 0:
+                self.app_ref.set_status("Nenhuma carta reconhecida no texto colado.")
+                return
+
+            decks = self.app_ref.store.data["decks"]
+            decks[target_name] = {
+                "main": parsed.get("main", {}),
+                "side": parsed.get("side", {}),
+                "tags": "Importado",
+                "game_plan": "",
+            }
+            self.app_ref.record_change(f"Deck importado por texto: {target_name} ({main_count} main, {side_count} side)")
+            popup.dismiss()
+            if self.app_ref.save_data():
+                self.app_ref.refresh_all()
+                self.app_ref.set_status(f"Deck '{target_name}' importado ({main_count} cartas)!")
+                self.app_ref.screens["deck_cards"].deck_spinner.text = target_name
+                self.app_ref.show_screen("deck_cards")
+
+        actions.add_widget(make_button("Cancelar", popup.dismiss, color=COLOR_SURFACE_2, height=42))
+        actions.add_widget(make_button("Importar e Abrir", do_import, color=COLOR_ACCENT, height=42))
+        box.add_widget(actions)
+        popup.open()
 
     def confirm_delete(self, deck_name, *_):
         box = BoxLayout(orientation="vertical", spacing=dp(12), padding=dp(14))
@@ -591,8 +730,12 @@ class DeckCardsScreen(ManaVaultScreen):
         self.deck_spinner.bind(text=lambda *_: self.render_cards_list())
         top_card.add_widget(self.deck_spinner)
 
-        add_btn = make_button("+  Adicionar Carta a Este Deck", self.jump_to_add_card, color=COLOR_ACCENT, height=46, font_size=13)
-        top_card.add_widget(add_btn)
+        deck_actions_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
+        add_btn = make_button("+ Adicionar Carta", self.jump_to_add_card, color=COLOR_ACCENT, height=44, font_size=12)
+        import_btn = make_button("📋 Importar Texto", self.import_to_this_deck_dialog, color=COLOR_SURFACE_2, height=44, font_size=12)
+        deck_actions_row.add_widget(add_btn)
+        deck_actions_row.add_widget(import_btn)
+        top_card.add_widget(deck_actions_row)
         self.content.add_widget(top_card)
 
         filter_card = create_card_box(padding=dp(14), spacing=dp(10))
@@ -639,6 +782,59 @@ class DeckCardsScreen(ManaVaultScreen):
     def jump_to_add_card(self, *_):
         self.app_ref.screens["add_cards"].deck_spinner.text = self.deck_spinner.text
         self.app_ref.show_screen("add_cards")
+
+    def import_to_this_deck_dialog(self, *_):
+        deck_name = self.deck_spinner.text
+        if deck_name not in self.app_ref.store.data.get("decks", {}):
+            self.app_ref.set_status("Selecione um deck antes de importar.")
+            return
+
+        box = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
+        box.add_widget(make_label(f"Importar cartas para '{deck_name}':", height=22, font_size=13, bold=True, color=COLOR_ACCENT_TEXT))
+        box.add_widget(make_label("Cole as cartas (ex: 4 Lightning Bolt...):", height=18, font_size=11, color=COLOR_TEXT_MUTED))
+        text_input = make_input("4 Lightning Bolt\n2 Counterspell\n\nSideboard\n2 Flusterstorm", multiline=True, height=160)
+        box.add_widget(text_input)
+
+        actions = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(10))
+        popup = Popup(title=f"Importar para {deck_name}", content=box, size_hint=(0.92, 0.80))
+
+        def do_import(*_):
+            raw = text_input.text.strip()
+            if not raw:
+                self.app_ref.set_status("Cole o texto da lista para importar.")
+                return
+            parsed = parse_decklist_text(raw, default_deck_name=deck_name)
+            deck = self.app_ref.store.data["decks"][deck_name]
+            added_total = 0
+
+            for sec in ("main", "side"):
+                deck.setdefault(sec, {})
+                for c_name, c_data in parsed.get(sec, {}).items():
+                    qty_to_add = c_data.get("qty", 1)
+                    if c_name in deck[sec]:
+                        existing = deck[sec][c_name]
+                        if isinstance(existing, dict):
+                            existing["qty"] = int(existing.get("qty", 1)) + qty_to_add
+                        else:
+                            deck[sec][c_name] = {"qty": int(existing) + qty_to_add, "cmc": 0, "color": "C", "type": "Outros", "description": "", "image_uri": ""}
+                    else:
+                        deck[sec][c_name] = c_data
+                    added_total += qty_to_add
+
+            if added_total == 0:
+                self.app_ref.set_status("Nenhuma carta reconhecida no texto.")
+                return
+
+            self.app_ref.record_change(f"Importadas {added_total} cartas em {deck_name}")
+            popup.dismiss()
+            if self.app_ref.save_data():
+                self.app_ref.set_status(f"✓ {added_total} cartas importadas com sucesso em {deck_name}!")
+                self.render_cards_list()
+
+        actions.add_widget(make_button("Cancelar", popup.dismiss, color=COLOR_SURFACE_2, height=42))
+        actions.add_widget(make_button("Importar Cartas", do_import, color=COLOR_ACCENT, height=42))
+        box.add_widget(actions)
+        popup.open()
 
     def adjust_qty(self, section, card_name, delta, *_):
         deck_name = self.deck_spinner.text
@@ -973,13 +1169,33 @@ class AddCardsScreen(ManaVaultScreen):
         cmc_row.add_widget(cmc_btn_plus)
         c3.add_widget(cmc_row)
 
-        c3.add_widget(make_label("Cor da Carta:", height=18, font_size=12, color=COLOR_TEXT_MUTED))
-        self.color_spinner = make_spinner("Incolor (C) - Terrenos / Artefatos", list(COLOR_OPTIONS_MAP.keys()), height=48)
-        self.color_spinner.bind(text=self.on_color_spinner_changed)
-        c3.add_widget(self.color_spinner)
+        c3.add_widget(make_label("Identidade de Cor (WUBRG + Incolor):", height=18, font_size=12, color=COLOR_TEXT_MUTED))
+        mana_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        self.mana_buttons = {}
+        self.active_mana_colors = set()
 
-        self.custom_color_input = make_input("Código de cor customizado (ex: UR, WUB, BR)", "C", height=48)
-        c3.add_widget(self.custom_color_input)
+        for m_key in ("W", "U", "B", "R", "G", "C"):
+            btn = Button(
+                text=m_key,
+                font_size="15sp",
+                bold=True,
+                size_hint=(1, 1),
+                background_normal="",
+                background_down="",
+                background_color=(0, 0, 0, 0),
+            )
+            btn.bind(on_release=lambda inst, k=m_key: self.toggle_mana_color(k))
+            self.mana_buttons[m_key] = btn
+            mana_row.add_widget(btn)
+
+        c3.add_widget(mana_row)
+
+        self.mana_summary_label = make_label("⚪ Incolor (C) - Terrenos / Artefatos", height=22, font_size=12, color=COLOR_ACCENT_TEXT, bold=True)
+        c3.add_widget(self.mana_summary_label)
+
+        self.custom_color_input = _ManaColorShim(self)
+        self.color_spinner = _ManaSpinnerShim(self)
+        self._update_mana_buttons_ui()
         self.content.add_widget(c3)
 
         # Card 5: Observações Opcionais
@@ -1265,17 +1481,7 @@ class AddCardsScreen(ManaVaultScreen):
 
                 self.name_input.text = card_name
                 self.cmc_input.text = str(card_info.get("cmc", 0))
-                self.custom_color_input.text = card_info.get("color", "C")
-
-                matched_opt = None
-                for opt_text, opt_code in COLOR_OPTIONS_MAP.items():
-                    if opt_code == card_info.get("color"):
-                        matched_opt = opt_text
-                        break
-                if matched_opt:
-                    self.color_spinner.text = matched_opt
-                else:
-                    self.color_spinner.text = "Multicolorida (Duas ou mais cores)"
+                self.set_mana_colors(card_info.get("color", "C"))
 
                 card_type = card_info.get("type", "Outros")
                 if card_type in CARD_TYPES:
@@ -1359,17 +1565,7 @@ class AddCardsScreen(ManaVaultScreen):
         try:
             self.name_input.text = info["name"]
             self.cmc_input.text = str(info["cmc"])
-            self.custom_color_input.text = info["color"]
-
-            matched_opt = None
-            for opt_text, opt_code in COLOR_OPTIONS_MAP.items():
-                if opt_code == info["color"]:
-                    matched_opt = opt_text
-                    break
-            if matched_opt:
-                self.color_spinner.text = matched_opt
-            else:
-                self.color_spinner.text = "Multicolorida (Duas ou mais cores)"
+            self.set_mana_colors(info.get("color", "C"))
 
             if info["type"] in CARD_TYPES:
                 self.type_spinner.text = info["type"]
@@ -1395,13 +1591,48 @@ class AddCardsScreen(ManaVaultScreen):
         val = max(min_val, val + delta)
         target_input.text = str(val)
 
-    def on_color_spinner_changed(self, instance, text):
-        code = COLOR_OPTIONS_MAP.get(text, "C")
-        if code != "MULTI":
-            self.custom_color_input.text = code
+    def toggle_mana_color(self, key):
+        if key == "C":
+            self.active_mana_colors.clear()
         else:
-            if self.custom_color_input.text in ("C", "W", "U", "B", "R", "G"):
-                self.custom_color_input.text = "UR"
+            if key in self.active_mana_colors:
+                self.active_mana_colors.remove(key)
+            else:
+                self.active_mana_colors.add(key)
+        self._update_mana_buttons_ui()
+
+    def set_mana_colors(self, code):
+        self.active_mana_colors.clear()
+        if code:
+            code_str = str(code).upper().strip()
+            if code_str != "C":
+                for ch in code_str:
+                    if ch in "WUBRG":
+                        self.active_mana_colors.add(ch)
+        self._update_mana_buttons_ui()
+
+    def get_mana_colors_string(self):
+        if not self.active_mana_colors:
+            return "C"
+        return "".join(c for c in "WUBRG" if c in self.active_mana_colors)
+
+    def _update_mana_buttons_ui(self):
+        is_colorless = (len(self.active_mana_colors) == 0)
+        for k, btn in self.mana_buttons.items():
+            is_active = (k == "C" and is_colorless) or (k in self.active_mana_colors)
+            info = MANA_COLOR_PALETTE[k]
+            if is_active:
+                apply_button_style(btn, info["bg"], border_color=info["border"], radius=8, border_width=1.5)
+                btn.color = info["fg"]
+            else:
+                apply_button_style(btn, COLOR_SURFACE_2, border_color=(0.18, 0.24, 0.36, 0.8), radius=8, border_width=1.0)
+                btn.color = COLOR_TEXT_MUTED
+        if hasattr(self, "mana_summary_label"):
+            c_str = self.get_mana_colors_string()
+            self.mana_summary_label.text = get_mtg_color_identity_title(c_str)
+
+    def on_color_spinner_changed(self, instance, text):
+        pass
 
     def on_name_text_changed(self, instance, text):
         """Disparado enquanto o usuário digita: exibe sugestões com debounce para máxima fluidez."""
@@ -1458,18 +1689,7 @@ class AddCardsScreen(ManaVaultScreen):
             alt = card_data.get("alt_name", "")
             self.name_input.text = name
             self.cmc_input.text = str(card_data.get("cmc", 0))
-            color_code = str(card_data.get("color", "C"))
-            self.custom_color_input.text = color_code
-
-            matched_opt = None
-            for opt_text, opt_code in COLOR_OPTIONS_MAP.items():
-                if opt_code == color_code:
-                    matched_opt = opt_text
-                    break
-            if matched_opt:
-                self.color_spinner.text = matched_opt
-            else:
-                self.color_spinner.text = "Multicolorida (Duas ou mais cores)"
+            self.set_mana_colors(card_data.get("color", "C"))
 
             c_type = str(card_data.get("type", "Criatura"))
             if c_type in CARD_TYPES:
@@ -1506,18 +1726,7 @@ class AddCardsScreen(ManaVaultScreen):
                 found_name = found.get("name", card_name)
                 self.name_input.text = found_name
                 self.cmc_input.text = str(found.get("cmc", 0))
-                raw_color = str(found.get("color", "C")).upper()
-                self.custom_color_input.text = raw_color
-
-                matched_opt = None
-                for opt_text, opt_code in COLOR_OPTIONS_MAP.items():
-                    if opt_code == raw_color:
-                        matched_opt = opt_text
-                        break
-                if matched_opt:
-                    self.color_spinner.text = matched_opt
-                else:
-                    self.color_spinner.text = "Multicolorida (Duas ou mais cores)"
+                self.set_mana_colors(found.get("color", "C"))
 
                 card_type = str(found.get("type", "Criatura"))
                 if card_type in CARD_TYPES:
@@ -1563,11 +1772,7 @@ class AddCardsScreen(ManaVaultScreen):
         deck = self.app_ref.store.data["decks"][deck_name]
         deck.setdefault(section_key, {})
 
-        chosen_color = COLOR_OPTIONS_MAP.get(self.color_spinner.text, "C")
-        if chosen_color == "MULTI":
-            color = self.custom_color_input.text.strip().upper() or "C"
-        else:
-            color = chosen_color
+        color = self.get_mana_colors_string()
 
         card_type = self.type_spinner.text if self.type_spinner.text in CARD_TYPES else "Outros"
         description = self.desc_input.text.strip()
@@ -1589,6 +1794,8 @@ class AddCardsScreen(ManaVaultScreen):
                 self.name_input.text = ""
                 self.desc_input.text = ""
                 self.qty_input.text = "1"
+                self.cmc_input.text = "0"
+                self.set_mana_colors("C")
                 self.set_card_image("")
                 self.suggestions_box.clear_widgets()
             finally:
@@ -1706,6 +1913,25 @@ class DeckAnalysisScreen(ManaVaultScreen):
         dist_card.add_widget(self.dist_label)
         self.content.add_widget(dist_card)
 
+        # Card de Recomendação de Base de Mana
+        self.mana_base_card = create_card_box(padding=dp(14), spacing=dp(10))
+        self.mana_base_card.add_widget(make_label("Recomendação de Base de Mana", height=22, font_size=14, bold=True, color=COLOR_ACCENT_TEXT))
+        self.mana_base_status_lbl = make_label("Calculando proporção de terrenos...", height=22, font_size=13, bold=True, color=COLOR_SUCCESS)
+        self.mana_base_card.add_widget(self.mana_base_status_lbl)
+
+        self.mana_base_details_lbl = Label(
+            text="",
+            size_hint_y=None,
+            font_size="13sp",
+            color=COLOR_TEXT_PRIMARY,
+            halign="left",
+            valign="top",
+        )
+        self.mana_base_details_lbl.bind(width=lambda inst, val: setattr(inst, "text_size", (val, None)))
+        self.mana_base_details_lbl.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(44), val[1] + dp(8))))
+        self.mana_base_card.add_widget(self.mana_base_details_lbl)
+        self.content.add_widget(self.mana_base_card)
+
         tools_card = create_card_box(padding=dp(14), spacing=dp(10))
         tools_card.add_widget(make_label("Ferramentas de Decklist", height=22, font_size=14, bold=True, color=COLOR_ACCENT_TEXT))
 
@@ -1714,6 +1940,7 @@ class DeckAnalysisScreen(ManaVaultScreen):
         t_row.add_widget(make_button("Importar", self.import_decklist_dialog, color=COLOR_SURFACE_2, height=42, font_size=12))
         t_row.add_widget(make_button("Copiar", self.copy_decklist, color=COLOR_SURFACE_2, height=42, font_size=12))
         tools_card.add_widget(t_row)
+        tools_card.add_widget(make_button("🎴 Simular Mão Inicial (Mulligan)", self.open_sample_hand_dialog, color=COLOR_ACCENT_HOVER, height=44, font_size=13))
         self.content.add_widget(tools_card)
 
         plan_card = create_card_box(padding=dp(14), spacing=dp(10))
@@ -1819,6 +2046,9 @@ class DeckAnalysisScreen(ManaVaultScreen):
             self.stat_legal_lbl.text = "Regras: -"
             self.mana_curve_container.clear_widgets()
             self.dist_label.text = "Crie ou selecione um deck para visualizar as métricas."
+            if hasattr(self, "mana_base_status_lbl"):
+                self.mana_base_status_lbl.text = "Selecione um deck."
+                self.mana_base_details_lbl.text = ""
             return
 
         summary = analyze_deck(deck)
@@ -1869,6 +2099,165 @@ class DeckAnalysisScreen(ManaVaultScreen):
 
         self.dist_label.text = f"Tipos de Cartas:\n{types_text}\n\nDistribuição por Cores:\n{colors_text}"
 
+        # Recomendação de Base de Mana
+        if hasattr(self, "mana_base_status_lbl"):
+            mb = calculate_mana_base_recommendation(deck.get("main", {}))
+            if mb["status"] == "good":
+                self.mana_base_status_lbl.text = f"✓ {mb['advice']}"
+                self.mana_base_status_lbl.color = COLOR_SUCCESS
+            elif mb["status"] == "warning":
+                self.mana_base_status_lbl.text = f"⚠️ {mb['advice']}"
+                self.mana_base_status_lbl.color = COLOR_WARNING
+            else:
+                self.mana_base_status_lbl.text = mb["advice"]
+                self.mana_base_status_lbl.color = COLOR_TEXT_MUTED
+
+            sources_lines = []
+            sources_lines.append(f"Terrenos Atuais: {mb['current_lands']} / {mb['total_cards']} cartas  |  Sugerido pelo CMC: ~{mb['recommended_lands']} terrenos")
+            if mb.get("color_sources"):
+                sources_lines.append("\nDistribuição Sugerida de Fontes de Mana:")
+                color_names = {"W": "☀️ Branco (W)", "U": "💧 Azul (U)", "B": "💀 Preto (B)", "R": "🔥 Vermelho (R)", "G": "🌳 Verde (G)"}
+                for c_key, c_data in mb["color_sources"].items():
+                    c_title = color_names.get(c_key, f"Cor {c_key}")
+                    sources_lines.append(f"• {c_title}: ~{c_data['count']} terrenos ({c_data['percentage']}% dos símbolos)")
+            self.mana_base_details_lbl.text = "\n".join(sources_lines)
+
+    def open_sample_hand_dialog(self, *_):
+        deck_name = self.deck_spinner.text
+        deck = self.app_ref.store.data.get("decks", {}).get(deck_name)
+        if not deck or not deck.get("main"):
+            self.app_ref.set_status("Adicione cartas ao Mainboard antes de simular a mão inicial.")
+            return
+
+        main_cards = deck.get("main", {})
+        total_main = sum(int(c.get("qty", 1) if isinstance(c, dict) else c) for c in main_cards.values())
+        if total_main < 7:
+            self.app_ref.set_status("O Mainboard precisa ter pelo menos 7 cartas para simular a mão.")
+            return
+
+        state = {
+            "mulligans": 0,
+            "sim_result": simulate_sample_hand(main_cards, 7),
+        }
+
+        content_box = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
+
+        mulligan_lbl = make_label("Mão Inicial Oficial (7 Cartas)", height=24, font_size=14, bold=True, color=COLOR_ACCENT_TEXT)
+        content_box.add_widget(mulligan_lbl)
+
+        stats_lbl = make_label("", height=42, font_size=12, color=COLOR_TEXT_PRIMARY)
+        content_box.add_widget(stats_lbl)
+
+        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False, bar_width=dp(4))
+        cards_layout = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
+        cards_layout.bind(minimum_height=cards_layout.setter("height"))
+        scroll.add_widget(cards_layout)
+        content_box.add_widget(scroll)
+
+        def update_ui():
+            res = state["sim_result"]
+            hand = res.get("hand", [])
+            lib = res.get("library", [])
+            mull = state["mulligans"]
+
+            if mull == 0:
+                mulligan_lbl.text = f"Mão Inicial (7 Cartas) · Deck: {len(hand) + len(lib)}"
+            else:
+                effective = max(1, 7 - mull)
+                mulligan_lbl.text = f"London Mulligan #{mull} (Compre 7, desça {mull} -> Mão de {effective})"
+
+            lands = res.get("lands_count", 0)
+            spells = res.get("spells_count", 0)
+            avg_cmc = res.get("avg_cmc", 0)
+            t1_t2 = res.get("playable_t1_t2", 0)
+            stats_lbl.text = (
+                f"🏞️ Terrenos: {lands}   |   ⚡ Mágicas: {spells}\n"
+                f"📊 CMC Médio: {avg_cmc}   |   🎯 Jogáveis T1-T2: {t1_t2}"
+            )
+
+            cards_layout.clear_widgets()
+            for idx, c in enumerate(hand, 1):
+                row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(8))
+                with row.canvas.before:
+                    Color(*COLOR_SURFACE_2)
+                    r = RoundedRectangle(size=row.size, pos=row.pos, radius=[dp(6)])
+                    row.bind(size=lambda inst, v, rect=r: setattr(rect, "size", v), pos=lambda inst, v, rect=r: setattr(rect, "pos", v))
+
+                name = c.get("name", "Desconhecido")
+                c_type = c.get("type", "Outros")
+                cmc = c.get("cmc", 0)
+                color = c.get("color", "C")
+                is_land = "terreno" in c_type.lower() or "land" in c_type.lower()
+                badge = "🏞️" if is_land else f"⚡{cmc}"
+
+                lbl_name = Label(
+                    text=f" {idx}. {name}",
+                    font_size="13sp",
+                    bold=True,
+                    color=COLOR_TEXT_PRIMARY,
+                    halign="left",
+                    valign="middle",
+                    size_hint_x=0.68,
+                )
+                lbl_name.bind(size=lbl_name.setter("text_size"))
+                row.add_widget(lbl_name)
+
+                lbl_info = Label(
+                    text=f"{badge} ({color})",
+                    font_size="12sp",
+                    color=COLOR_ACCENT_TEXT if is_land else COLOR_TEXT_MUTED,
+                    halign="right",
+                    valign="middle",
+                    size_hint_x=0.32,
+                )
+                lbl_info.bind(size=lbl_info.setter("text_size"))
+                row.add_widget(lbl_info)
+                cards_layout.add_widget(row)
+
+        update_ui()
+
+        btn_row1 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+
+        def new_hand(*_):
+            state["mulligans"] = 0
+            state["sim_result"] = simulate_sample_hand(main_cards, 7)
+            update_ui()
+
+        def do_mulligan(*_):
+            state["mulligans"] += 1
+            state["sim_result"] = simulate_sample_hand(main_cards, 7)
+            update_ui()
+
+        def draw_card(*_):
+            lib = state["sim_result"].get("library", [])
+            if not lib:
+                self.app_ref.set_status("O grimório acabou!")
+                return
+            card = lib.pop(0)
+            state["sim_result"]["hand"].append(card)
+            h = state["sim_result"]["hand"]
+            lands = [c for c in h if "terreno" in c.get("type", "").lower() or "land" in c.get("type", "").lower()]
+            spells = [c for c in h if c not in lands]
+            state["sim_result"]["lands_count"] = len(lands)
+            state["sim_result"]["spells_count"] = len(spells)
+            state["sim_result"]["avg_cmc"] = round(sum(c.get("cmc", 0) for c in spells) / len(spells), 1) if spells else 0
+            state["sim_result"]["playable_t1_t2"] = sum(1 for c in spells if c.get("cmc", 0) <= 2)
+            update_ui()
+
+        btn_row1.add_widget(make_button("🔄 Nova Mão", new_hand, color=COLOR_ACCENT, height=42, font_size=12))
+        btn_row1.add_widget(make_button("📉 Mulligan", do_mulligan, color=COLOR_SURFACE_2, height=42, font_size=12))
+        btn_row1.add_widget(make_button("🃏 Comprar", draw_card, color=COLOR_SURFACE_2, height=42, font_size=12))
+        content_box.add_widget(btn_row1)
+
+        popup = Popup(
+            title=f"Mão Inicial: {deck_name}",
+            content=content_box,
+            size_hint=(0.94, 0.85),
+        )
+        btn_close = make_button("Fechar Simulador", popup.dismiss, color=COLOR_SURFACE_2, height=40, font_size=12)
+        content_box.add_widget(btn_close)
+        popup.open()
+
     def refresh(self):
         decks = self.app_ref.store.data.get("decks", {})
         names = sorted(decks.keys(), key=normalize_keyword_search)
@@ -1893,6 +2282,15 @@ class MatchesScreen(ManaVaultScreen):
         super().__init__(app_ref, **kwargs)
         self.edit_index = None
         self.heading("Registro de Partidas")
+
+        self.banner_life_btn = make_button(
+            "⚔️ Abrir Marcador de Vida da Partida (Life Counter)",
+            self.open_life_counter,
+            color=COLOR_ACCENT_HOVER,
+            height=48,
+            font_size=13,
+        )
+        self.content.add_widget(self.banner_life_btn)
 
         c1 = create_card_box(padding=dp(14), spacing=dp(10))
         c1.add_widget(make_label("1. Jogadores & Decks", height=22, font_size=13, bold=True, color=COLOR_ACCENT_TEXT))
@@ -2007,6 +2405,232 @@ class MatchesScreen(ManaVaultScreen):
             self.opponent_deck_spinner.text = prev
         elif opp_list:
             self.opponent_deck_spinner.text = opp_list[0]
+
+    def open_life_counter(self, *_):
+        opp_default = self.opponent_name_input.text.strip() or "Adversário"
+        state = {
+            "mode": 20,
+            "p1_life": 20,
+            "p2_life": 20,
+            "p1_poison": 0,
+            "p2_poison": 0,
+            "p1_cmd": 0,
+            "p2_cmd": 0,
+            "p1_wins": 0,
+            "p2_wins": 0,
+            "game": 1,
+            "p2_name": opp_default,
+        }
+
+        content_box = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8))
+
+        # Mode Selection Row
+        mode_row = BoxLayout(size_hint_y=None, height=dp(36), spacing=dp(6))
+        btn_m20 = make_button("20 HP (Padrão)", lambda *_: set_hp_mode(20), color=COLOR_ACCENT, height=36, font_size=11)
+        btn_m40 = make_button("40 HP (Commander)", lambda *_: set_hp_mode(40), color=COLOR_SURFACE_2, height=36, font_size=11)
+        btn_m25 = make_button("25 HP (Brawl)", lambda *_: set_hp_mode(25), color=COLOR_SURFACE_2, height=36, font_size=11)
+        mode_row.add_widget(btn_m20)
+        mode_row.add_widget(btn_m40)
+        mode_row.add_widget(btn_m25)
+        content_box.add_widget(mode_row)
+
+        header_lbl = make_label("Game 1  ·  Placar: Você 0  x  0 Adversário", height=24, font_size=13, bold=True, color=COLOR_ACCENT_TEXT, halign="center")
+        content_box.add_widget(header_lbl)
+
+        players_box = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(250))
+
+        # Player 1 (Você)
+        p1_card = create_card_box(padding=dp(8), spacing=dp(4))
+        p1_card.add_widget(make_label("Você", height=20, font_size=13, bold=True, color=COLOR_TEXT_PRIMARY, halign="center"))
+        p1_life_lbl = Label(text="20", font_size="38sp", bold=True, color=COLOR_ACCENT_TEXT, size_hint_y=None, height=dp(50), halign="center", valign="middle")
+        p1_life_lbl.bind(size=p1_life_lbl.setter("text_size"))
+        p1_card.add_widget(p1_life_lbl)
+
+        p1_adj_row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(4))
+        p1_adj_row.add_widget(make_button("-5", lambda *_: adj_life(1, -5), color=COLOR_SURFACE_2, height=36, font_size=12))
+        p1_adj_row.add_widget(make_button("-1", lambda *_: adj_life(1, -1), color=COLOR_SURFACE_2, height=36, font_size=12))
+        p1_adj_row.add_widget(make_button("+1", lambda *_: adj_life(1, 1), color=COLOR_SURFACE_2, height=36, font_size=12))
+        p1_adj_row.add_widget(make_button("+5", lambda *_: adj_life(1, 5), color=COLOR_SURFACE_2, height=36, font_size=12))
+        p1_card.add_widget(p1_adj_row)
+
+        p1_counters_row = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(4))
+        p1_poi_lbl = Label(text="💀 0", font_size="11sp", color=COLOR_TEXT_MUTED, size_hint_x=0.5, halign="center", valign="middle")
+        p1_poi_lbl.bind(size=p1_poi_lbl.setter("text_size"))
+        p1_poi_minus = make_button("-", lambda *_: adj_poi(1, -1), color=COLOR_SURFACE_3, height=30, font_size=12)
+        p1_poi_plus = make_button("+", lambda *_: adj_poi(1, 1), color=COLOR_SURFACE_3, height=30, font_size=12)
+        p1_counters_row.add_widget(p1_poi_lbl)
+        p1_counters_row.add_widget(p1_poi_minus)
+        p1_counters_row.add_widget(p1_poi_plus)
+        p1_card.add_widget(p1_counters_row)
+
+        p1_cmd_row = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(4))
+        p1_cmd_lbl = Label(text="🛡️ 0", font_size="11sp", color=COLOR_TEXT_MUTED, size_hint_x=0.5, halign="center", valign="middle")
+        p1_cmd_lbl.bind(size=p1_cmd_lbl.setter("text_size"))
+        p1_cmd_minus = make_button("-", lambda *_: adj_cmd(1, -1), color=COLOR_SURFACE_3, height=30, font_size=12)
+        p1_cmd_plus = make_button("+", lambda *_: adj_cmd(1, 1), color=COLOR_SURFACE_3, height=30, font_size=12)
+        p1_cmd_row.add_widget(p1_cmd_lbl)
+        p1_cmd_row.add_widget(p1_cmd_minus)
+        p1_cmd_row.add_widget(p1_cmd_plus)
+        p1_card.add_widget(p1_cmd_row)
+
+        p1_win_btn = make_button("✓ Venceu Game", lambda *_: win_game(1), color=COLOR_SUCCESS, height=36, font_size=11)
+        p1_card.add_widget(p1_win_btn)
+        players_box.add_widget(p1_card)
+
+        # Player 2 (Adversário)
+        p2_card = create_card_box(padding=dp(8), spacing=dp(4))
+        p2_title_lbl = make_label(opp_default, height=20, font_size=13, bold=True, color=COLOR_TEXT_PRIMARY, halign="center")
+        p2_card.add_widget(p2_title_lbl)
+        p2_life_lbl = Label(text="20", font_size="38sp", bold=True, color=(1.0, 0.45, 0.45, 1.0), size_hint_y=None, height=dp(50), halign="center", valign="middle")
+        p2_life_lbl.bind(size=p2_life_lbl.setter("text_size"))
+        p2_card.add_widget(p2_life_lbl)
+
+        p2_adj_row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(4))
+        p2_adj_row.add_widget(make_button("-5", lambda *_: adj_life(2, -5), color=COLOR_SURFACE_2, height=36, font_size=12))
+        p2_adj_row.add_widget(make_button("-1", lambda *_: adj_life(2, -1), color=COLOR_SURFACE_2, height=36, font_size=12))
+        p2_adj_row.add_widget(make_button("+1", lambda *_: adj_life(2, 1), color=COLOR_SURFACE_2, height=36, font_size=12))
+        p2_adj_row.add_widget(make_button("+5", lambda *_: adj_life(2, 5), color=COLOR_SURFACE_2, height=36, font_size=12))
+        p2_card.add_widget(p2_adj_row)
+
+        p2_counters_row = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(4))
+        p2_poi_lbl = Label(text="💀 0", font_size="11sp", color=COLOR_TEXT_MUTED, size_hint_x=0.5, halign="center", valign="middle")
+        p2_poi_lbl.bind(size=p2_poi_lbl.setter("text_size"))
+        p2_poi_minus = make_button("-", lambda *_: adj_poi(2, -1), color=COLOR_SURFACE_3, height=30, font_size=12)
+        p2_poi_plus = make_button("+", lambda *_: adj_poi(2, 1), color=COLOR_SURFACE_3, height=30, font_size=12)
+        p2_counters_row.add_widget(p2_poi_lbl)
+        p2_counters_row.add_widget(p2_poi_minus)
+        p2_counters_row.add_widget(p2_poi_plus)
+        p2_card.add_widget(p2_counters_row)
+
+        p2_cmd_row = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(4))
+        p2_cmd_lbl = Label(text="🛡️ 0", font_size="11sp", color=COLOR_TEXT_MUTED, size_hint_x=0.5, halign="center", valign="middle")
+        p2_cmd_lbl.bind(size=p2_cmd_lbl.setter("text_size"))
+        p2_cmd_minus = make_button("-", lambda *_: adj_cmd(2, -1), color=COLOR_SURFACE_3, height=30, font_size=12)
+        p2_cmd_plus = make_button("+", lambda *_: adj_cmd(2, 1), color=COLOR_SURFACE_3, height=30, font_size=12)
+        p2_cmd_row.add_widget(p2_cmd_lbl)
+        p2_cmd_row.add_widget(p2_cmd_minus)
+        p2_cmd_row.add_widget(p2_cmd_plus)
+        p2_card.add_widget(p2_cmd_row)
+
+        p2_win_btn = make_button("✓ Venceu Game", lambda *_: win_game(2), color=COLOR_DANGER, height=36, font_size=11)
+        p2_card.add_widget(p2_win_btn)
+        players_box.add_widget(p2_card)
+
+        content_box.add_widget(players_box)
+
+        def update_labels():
+            p1_life_lbl.text = str(state["p1_life"])
+            p2_life_lbl.text = str(state["p2_life"])
+            p1_poi_lbl.text = f"💀 {state['p1_poison']}"
+            p2_poi_lbl.text = f"💀 {state['p2_poison']}"
+            p1_cmd_lbl.text = f"🛡️ {state['p1_cmd']}"
+            p2_cmd_lbl.text = f"🛡️ {state['p2_cmd']}"
+            header_lbl.text = f"Game {state['game']}  ·  Placar: Você {state['p1_wins']}  x  {state['p2_wins']} {state['p2_name']}"
+
+        def set_hp_mode(hp):
+            state["mode"] = hp
+            state["p1_life"] = hp
+            state["p2_life"] = hp
+            apply_button_style(btn_m20, COLOR_ACCENT if hp == 20 else COLOR_SURFACE_2, radius=8)
+            apply_button_style(btn_m40, COLOR_ACCENT if hp == 40 else COLOR_SURFACE_2, radius=8)
+            apply_button_style(btn_m25, COLOR_ACCENT if hp == 25 else COLOR_SURFACE_2, radius=8)
+            update_labels()
+
+        def adj_life(player, delta):
+            if player == 1:
+                state["p1_life"] += delta
+            else:
+                state["p2_life"] += delta
+            update_labels()
+
+        def adj_poi(player, delta):
+            if player == 1:
+                state["p1_poison"] = max(0, state["p1_poison"] + delta)
+            else:
+                state["p2_poison"] = max(0, state["p2_poison"] + delta)
+            update_labels()
+
+        def adj_cmd(player, delta):
+            if player == 1:
+                state["p1_cmd"] = max(0, state["p1_cmd"] + delta)
+            else:
+                state["p2_cmd"] = max(0, state["p2_cmd"] + delta)
+            update_labels()
+
+        def win_game(player):
+            if player == 1:
+                state["p1_wins"] += 1
+            else:
+                state["p2_wins"] += 1
+            state["game"] += 1
+            state["p1_life"] = state["mode"]
+            state["p2_life"] = state["mode"]
+            state["p1_poison"] = 0
+            state["p2_poison"] = 0
+            state["p1_cmd"] = 0
+            state["p2_cmd"] = 0
+            update_labels()
+
+        def reset_game(*_):
+            state["p1_life"] = state["mode"]
+            state["p2_life"] = state["mode"]
+            state["p1_poison"] = 0
+            state["p2_poison"] = 0
+            state["p1_cmd"] = 0
+            state["p2_cmd"] = 0
+            update_labels()
+
+        act_row1 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+        act_row1.add_widget(make_button("🔄 Resetar Vidas", reset_game, color=COLOR_SURFACE_2, height=42, font_size=12))
+
+        def finish_and_fill(*_):
+            p1_w = state["p1_wins"]
+            p2_w = state["p2_wins"]
+            if p1_w == 0 and p2_w == 0:
+                if state["p1_life"] > state["p2_life"]:
+                    p1_w, p2_w = 2, 0
+                elif state["p2_life"] > state["p1_life"]:
+                    p1_w, p2_w = 0, 2
+                else:
+                    p1_w, p2_w = 1, 1
+
+            target_score = f"{p1_w} x {p2_w}"
+            if target_score in SCORE_OPTIONS:
+                self.score_spinner.text = target_score
+            else:
+                self.score_spinner.values = list(self.score_spinner.values) + [target_score]
+                self.score_spinner.text = target_score
+
+            if p1_w > p2_w:
+                self.set_result_quick("Win")
+            elif p2_w > p1_w:
+                self.set_result_quick("Loss")
+            else:
+                self.result_spinner.text = "Draw"
+
+            prev_notes = self.notes_input.text.strip()
+            summary_note = (
+                f"[Marcador de Vida] Placar final: {p1_w}x{p2_w} em {state['game']} game(s). "
+                f"Vidas finais G{state['game']}: Você {state['p1_life']} vs {state['p2_name']} {state['p2_life']}."
+            )
+            if summary_note not in prev_notes:
+                self.notes_input.text = f"{prev_notes}\n{summary_note}".strip() if prev_notes else summary_note
+
+            popup.dismiss()
+            self.app_ref.set_status(f"Placar {p1_w} x {p2_w} preenchido pelo marcador de vida!")
+
+        act_row1.add_widget(make_button("💾 Salvar no Registro", finish_and_fill, color=COLOR_ACCENT, height=42, font_size=12))
+        content_box.add_widget(act_row1)
+
+        popup = Popup(
+            title="Marcador de Vida da Partida",
+            content=content_box,
+            size_hint=(0.96, None),
+            height=dp(430),
+        )
+        btn_close = make_button("Fechar Marcador", popup.dismiss, color=COLOR_SURFACE_3, height=38, font_size=12)
+        content_box.add_widget(btn_close)
+        popup.open()
 
     def load_match_for_edit(self, match, index):
         self.edit_index = index
@@ -2591,7 +3215,7 @@ class ManaVaultApp(App):
 
         # Footer
         footer = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8))
-        footer.add_widget(make_label("v1.15.0  ·  Armazenamento Local Protegido", height=18, font_size=11, color=COLOR_TEXT_FAINT, halign="center"))
+        footer.add_widget(make_label("v1.16.0  ·  Armazenamento Local Protegido", height=18, font_size=11, color=COLOR_TEXT_FAINT, halign="center"))
         close_btn = make_button("Fechar Menu", popup.dismiss, color=COLOR_SURFACE_3, height=42, font_size=13)
         footer.add_widget(close_btn)
         footer.bind(minimum_height=footer.setter("height"))

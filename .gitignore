@@ -13,3 +13,4 @@ dist_apk/
 *.zip
 _backups/
 *.bak
+_legacy/

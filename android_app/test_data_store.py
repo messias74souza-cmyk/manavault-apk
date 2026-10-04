@@ -269,6 +269,32 @@ class DataStoreTests(unittest.TestCase):
         self.assertIsNotNone(found)
         self.assertIn(found["name"], ["Lightning Bolt", "Raio"])
 
+    def test_simulate_sample_hand(self):
+        from data_store import simulate_sample_hand
+        deck_cards = {
+            "Mountain": {"qty": 20, "type": "Terreno", "cmc": 0, "color": "R"},
+            "Lightning Bolt": {"qty": 20, "type": "Instantânea", "cmc": 1, "color": "R"},
+            "Monastery Swiftspear": {"qty": 20, "type": "Criatura", "cmc": 1, "color": "R"},
+        }
+        res = simulate_sample_hand(deck_cards, hand_size=7)
+        self.assertEqual(len(res["hand"]), 7)
+        self.assertEqual(len(res["library"]), 53)
+        self.assertEqual(res["total_deck_cards"], 60)
+        self.assertEqual(res["lands_count"] + res["spells_count"], 7)
+
+    def test_calculate_mana_base_recommendation(self):
+        from data_store import calculate_mana_base_recommendation
+        deck_cards = {
+            "Mountain": {"qty": 18, "type": "Terreno", "cmc": 0, "color": "R"},
+            "Lightning Bolt": {"qty": 20, "type": "Instantânea", "cmc": 1, "color": "R"},
+            "Counterspell": {"qty": 22, "type": "Instantânea", "cmc": 2, "color": "U"},
+        }
+        rec = calculate_mana_base_recommendation(deck_cards)
+        self.assertEqual(rec["current_lands"], 18)
+        self.assertTrue(rec["recommended_lands"] in (19, 20, 21))
+        self.assertIn("R", rec["color_sources"])
+        self.assertIn("U", rec["color_sources"])
+
 
 if __name__ == "__main__":
     unittest.main()

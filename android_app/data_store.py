@@ -1,5 +1,6 @@
 import base64
 import json
+import random
 import re
 import shutil
 import unicodedata
@@ -1264,3 +1265,263 @@ class DataStore:
 
     def export_json(self):
         return json.dumps(self.data, indent=4, ensure_ascii=False) + "\n"
+
+
+def parse_decklist_text(text, default_deck_name="Deck Importado"):
+    """
+    Analisa texto no padrão MTG Arena / MTGO / Moxfield / LigaMagic e retorna estrutura de deck.
+    Exemplo:
+        4 Lightning Bolt
+        4 Dragon's Rage Channeler
+        18 Mountain
+        
+        Sideboard
+        2 Flusterstorm
+        2 Blood Moon
+    """
+    lines = str(text or "").splitlines()
+    deck_name = default_deck_name
+    main_cards = {}
+    side_cards = {}
+    current_section = "main"
+
+    catalog = get_card_catalog()
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        # Comentários de cabeçalho (ex: // Deck: Izzet Murktide)
+        if line.startswith(("//", "#")):
+            clean_comment = line.lstrip("/# ").strip()
+            if clean_comment.lower().startswith("deck:"):
+                detected_name = clean_comment[5:].strip()
+                if detected_name:
+                    deck_name = detected_name
+            elif clean_comment and deck_name == default_deck_name:
+                deck_name = clean_comment
+            continue
+
+        # Transição de seção
+        lower_line = line.lower()
+        if lower_line in ("sideboard", "sideboard:", "side", "side:", "reserva", "reserva:"):
+            current_section = "side"
+            continue
+        if lower_line in ("mainboard", "mainboard:", "main", "main:", "deck", "deck principal"):
+            current_section = "main"
+            continue
+
+        is_side_prefix = False
+        if line.upper().startswith("SB:"):
+            is_side_prefix = True
+            line = line[3:].strip()
+
+        # Regex para quantidade e nome da carta:
+        m = re.match(r"^(\d+)\s*[xX]?\s+(.+)$", line)
+        if m:
+            qty = max(1, int(m.group(1)))
+            raw_name = m.group(2).strip()
+        else:
+            qty = 1
+            raw_name = line
+
+        # Limpar código de coleção, número de coletor, tags de foil
+        clean_name = re.sub(r"\s*[\(\[][A-Za-z0-9_\-\s]+[\)\]].*$", "", raw_name).strip()
+        clean_name = re.sub(r"\s*\*\w+\*.*$", "", clean_name).strip()
+        clean_name = re.sub(r"\s*#\d+.*$", "", clean_name).strip()
+        if not clean_name:
+            continue
+
+        # Consultar catálogo offline para preencher dados
+        info = catalog.get(clean_name)
+        if not info:
+            norm_target = normalize_keyword_search(clean_name)
+            for k, cat_info in catalog.items():
+                if normalize_keyword_search(k) == norm_target or normalize_keyword_search(cat_info.get("alt_name", "")) == norm_target:
+                    info = cat_info
+                    break
+
+        if info:
+            cmc = int(info.get("cmc", 0) or 0)
+            color = str(info.get("color", "C"))
+            card_type = str(info.get("type", "Outros"))
+            img_uri = str(info.get("image_url", info.get("image_uri", "")))
+        else:
+            low_name = clean_name.lower()
+            if any(b in low_name for b in ("mountain", "island", "plains", "swamp", "forest", "floresta", "pantano", "ilha", "planicie", "montanha")):
+                card_type = "Terreno"
+                color = "C"
+                cmc = 0
+            else:
+                card_type = "Outros"
+                color = "C"
+                cmc = 0
+            img_uri = ""
+
+        target_dict = side_cards if (current_section == "side" or is_side_prefix) else main_cards
+        if clean_name in target_dict:
+            target_dict[clean_name]["qty"] += qty
+        else:
+            target_dict[clean_name] = {
+                "qty": qty,
+                "cmc": cmc,
+                "color": color,
+                "type": card_type,
+                "description": "",
+                "image_uri": img_uri,
+            }
+
+    return {
+        "deck_name": deck_name,
+        "main": main_cards,
+        "side": side_cards,
+    }
+
+
+def simulate_sample_hand(deck_main_cards, hand_size=7):
+    """Simula a compra de uma mão inicial de 7 cartas a partir do deck principal."""
+    deck_pool = []
+    if isinstance(deck_main_cards, dict):
+        for name, info in deck_main_cards.items():
+            if isinstance(info, dict):
+                qty = max(1, int(info.get("qty", 1)))
+                card_type = str(info.get("type", "Outros"))
+                cmc = int(info.get("cmc", 0) or 0)
+                color = str(info.get("color", "C"))
+                img = str(info.get("image_uri", ""))
+            else:
+                qty = max(1, int(info))
+                card_type = "Outros"
+                cmc = 0
+                color = "C"
+                img = ""
+            for _ in range(qty):
+                deck_pool.append({
+                    "name": name,
+                    "type": card_type,
+                    "cmc": cmc,
+                    "color": color,
+                    "image_uri": img,
+                })
+
+    if not deck_pool:
+        return {"hand": [], "library": [], "total_deck_cards": 0, "lands_count": 0, "spells_count": 0, "avg_cmc": 0, "playable_t1_t2": 0}
+
+    random.shuffle(deck_pool)
+    actual_hand_size = min(hand_size, len(deck_pool))
+    hand = deck_pool[:actual_hand_size]
+    library = deck_pool[actual_hand_size:]
+
+    lands = [c for c in hand if "terreno" in c["type"].lower() or "land" in c["type"].lower()]
+    spells = [c for c in hand if c not in lands]
+    avg_cmc = round(sum(c["cmc"] for c in spells) / len(spells), 1) if spells else 0
+    t1_t2 = sum(1 for c in spells if c["cmc"] <= 2)
+
+    return {
+        "hand": hand,
+        "library": library,
+        "total_deck_cards": len(deck_pool),
+        "lands_count": len(lands),
+        "spells_count": len(spells),
+        "avg_cmc": avg_cmc,
+        "playable_t1_t2": t1_t2,
+    }
+
+
+def calculate_mana_base_recommendation(deck_main_cards):
+    """
+    Calcula recomendação inteligente de proporção de terrenos e fontes de mana.
+    """
+    if not isinstance(deck_main_cards, dict) or not deck_main_cards:
+        return {
+            "current_lands": 0,
+            "recommended_lands": 0,
+            "total_cards": 0,
+            "avg_cmc": 0,
+            "color_sources": {},
+            "advice": "Adicione cartas ao deck para calcular a recomendação de mana.",
+            "status": "neutral",
+        }
+
+    total_cards = 0
+    current_lands = 0
+    spells = []
+    color_pips = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0}
+
+    for name, info in deck_main_cards.items():
+        if isinstance(info, dict):
+            qty = max(1, int(info.get("qty", 1)))
+            card_type = str(info.get("type", "Outros")).lower()
+            cmc = int(info.get("cmc", 0) or 0)
+            color = str(info.get("color", "C")).upper()
+        else:
+            qty = max(1, int(info))
+            card_type = "outros"
+            cmc = 0
+            color = "C"
+
+        total_cards += qty
+        if "terreno" in card_type or "land" in card_type:
+            current_lands += qty
+        else:
+            for _ in range(qty):
+                spells.append({"name": name, "cmc": cmc, "color": color})
+                for char in color:
+                    if char in color_pips:
+                        color_pips[char] += 1
+
+    if not spells:
+        return {
+            "current_lands": current_lands,
+            "recommended_lands": 20 if total_cards <= 60 else 36,
+            "total_cards": total_cards,
+            "avg_cmc": 0,
+            "color_sources": {},
+            "advice": "Deck contém apenas terrenos.",
+            "status": "neutral",
+        }
+
+    avg_cmc = sum(s["cmc"] for s in spells) / len(spells)
+
+    if total_cards >= 80:  # Commander / Brawl
+        recommended_lands = 35 if avg_cmc < 2.6 else 37 if avg_cmc < 3.3 else 39
+    elif total_cards <= 45:  # Limited
+        recommended_lands = 16 if avg_cmc < 2.5 else 17
+    else:  # 60 cards Constructed
+        recommended_lands = 19 if avg_cmc < 1.9 else 21 if avg_cmc < 2.5 else 23 if avg_cmc < 3.2 else 25
+
+    total_pips = sum(color_pips.values())
+    color_sources = {}
+    if total_pips > 0 and recommended_lands > 0:
+        for c, count in color_pips.items():
+            if count > 0:
+                pct = count / total_pips
+                allocated = max(1, round(pct * recommended_lands))
+                color_sources[c] = {
+                    "count": allocated,
+                    "percentage": round(pct * 100, 1),
+                    "pips": count,
+                }
+
+    diff = current_lands - recommended_lands
+    if abs(diff) <= 1:
+        advice = f"Base equilibrada! Seu deck possui {current_lands} terrenos (ideal: ~{recommended_lands})."
+        status = "good"
+    elif diff < -1:
+        advice = f"Atenção: Apenas {current_lands} terrenos para CMC médio de {avg_cmc:.1f}. Recomendado aumentar para ~{recommended_lands} terrenos."
+        status = "warning"
+    else:
+        advice = f"Excesso de mana: {current_lands} terrenos para CMC médio de {avg_cmc:.1f}. Recomendado reduzir para ~{recommended_lands} terrenos."
+        status = "warning"
+
+    return {
+        "current_lands": current_lands,
+        "recommended_lands": recommended_lands,
+        "total_cards": total_cards,
+        "avg_cmc": round(avg_cmc, 1),
+        "color_sources": color_sources,
+        "advice": advice,
+        "status": status,
+    }
+

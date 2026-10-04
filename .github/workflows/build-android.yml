@@ -120,9 +120,9 @@ jobs:
         if: success()
         with:
           files: android_app/bin/*.apk
-          tag_name: v1.15.0
-          name: "ManaVault Android APK v1.15.0"
-          body: "ManaVault v1.15.0 - Otimização de digitação com debounce instantâneo, auto-scroll da tela ao abrir o teclado virtual e Consulta de Regras MTG em estilo Accordion vertical de alta performance."
+          tag_name: v1.16.0
+          name: "ManaVault Android APK v1.16.0"
+          body: "ManaVault v1.16.0 - Botões de mana WUBRG (+ C), importador de decklists por texto (MTG Arena / Moxfield), simulador de mão inicial (Mulligan), recomendação inteligente de base de mana e marcador de vida interativo para partidas."
           draft: false
           prerelease: false
         env:
