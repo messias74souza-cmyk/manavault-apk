@@ -15,7 +15,7 @@ source.dir = .
 source.include_exts = py,json
 
 # (str) Application version
-version = 1.14.0
+version = 1.15.0
 
 # (list) Application requirements
 requirements = python3,kivy,androidstorage4kivy

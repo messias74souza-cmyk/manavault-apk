@@ -346,7 +346,7 @@ def search_card_database(query, decks=None, limit=6):
             starts.append(info)
         elif q_norm in k_norm or (alt_norm and q_norm in alt_norm):
             contains.append(info)
-        elif len(q_norm) >= 3:
+        elif len(q_norm) >= 3 and (len(exact) + len(starts) + len(contains) < limit):
             s1 = card_similarity(q_norm, k_norm)
             s2 = card_similarity(q_norm, alt_norm) if alt_norm else 0
             best_s = max(s1, s2)

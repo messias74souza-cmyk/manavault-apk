@@ -120,9 +120,9 @@ jobs:
         if: success()
         with:
           files: android_app/bin/*.apk
-          tag_name: v1.14.0
-          name: "ManaVault Android APK v1.14.0"
-          body: "ManaVault v1.14.0 - Tema visual AMOLED Black, contornos azul real nos botões, menu lateral moderno à esquerda, efeitos animados de carregamento contínuo e espaçamentos otimizados."
+          tag_name: v1.15.0
+          name: "ManaVault Android APK v1.15.0"
+          body: "ManaVault v1.15.0 - Otimização de digitação com debounce instantâneo, auto-scroll da tela ao abrir o teclado virtual e Consulta de Regras MTG em estilo Accordion vertical de alta performance."
           draft: false
           prerelease: false
         env:

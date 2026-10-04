@@ -13,10 +13,16 @@ from datetime import date, datetime
 from functools import partial
 from pathlib import Path
 
+from kivy.config import Config
+Config.set("kivy", "keyboard_mode", "system")
+
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.clipboard import Clipboard
 from kivy.core.window import Window
+Window.softinput_mode = "below_target"
+Window.keyboard_anim_args = {"d": 0.2, "t": "in_out_expo"}
+
 from kivy.graphics import Color, Line, Rectangle, RoundedRectangle
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
@@ -265,7 +271,20 @@ def apply_button_style(btn, color, border_color=None, radius=8, border_width=1.2
         btn.bind(pos=_update, size=_update)
 
 
-def make_input(hint, value="", multiline=False, height=48):
+def scroll_to_focused_widget(widget):
+    """Garante que o campo focado seja rolado para a visualização dentro de qualquer ScrollView."""
+    p = getattr(widget, "parent", None)
+    while p is not None:
+        if isinstance(p, ScrollView):
+            try:
+                p.scroll_to(widget, padding=dp(60), animate=True)
+            except Exception:
+                pass
+            break
+        p = getattr(p, "parent", None)
+
+
+def make_input(hint, value="", multiline=False, height=48, input_filter=None):
     inp = TextInput(
         hint_text=hint,
         text=str(value or ""),
@@ -280,6 +299,10 @@ def make_input(hint, value="", multiline=False, height=48):
         foreground_color=COLOR_TEXT_PRIMARY,
         hint_text_color=COLOR_TEXT_MUTED,
         cursor_color=COLOR_ACCENT_TEXT,
+        use_bubble=False,
+        use_handles=False,
+        write_tab=False,
+        input_filter=input_filter,
     )
     with inp.canvas.after:
         Color(*COLOR_BORDER_BLUE_SUBTLE)
@@ -289,6 +312,12 @@ def make_input(hint, value="", multiline=False, height=48):
             line.rounded_rectangle = (inst.x, inst.y, inst.width, inst.height, dp(8))
 
         inp.bind(pos=_update, size=_update)
+
+    def _on_focus(inst, focused):
+        if focused:
+            Clock.schedule_once(lambda dt: scroll_to_focused_widget(inst), 0.15)
+
+    inp.bind(focus=_on_focus)
     return inp
 
 
@@ -567,8 +596,9 @@ class DeckCardsScreen(ManaVaultScreen):
         self.content.add_widget(top_card)
 
         filter_card = create_card_box(padding=dp(14), spacing=dp(10))
+        self._search_debounce_event = None
         self.search_input = make_input("Buscar carta pelo nome...", height=48)
-        self.search_input.bind(text=lambda *_: self.render_cards_list())
+        self.search_input.bind(text=self._on_search_text_changed)
         filter_card.add_widget(self.search_input)
 
         pills_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
@@ -591,6 +621,11 @@ class DeckCardsScreen(ManaVaultScreen):
         self.cards_list = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10))
         self.cards_list.bind(minimum_height=self.cards_list.setter("height"))
         self.content.add_widget(self.cards_list)
+
+    def _on_search_text_changed(self, instance, text):
+        if self._search_debounce_event:
+            self._search_debounce_event.cancel()
+        self._search_debounce_event = Clock.schedule_once(lambda dt: self.render_cards_list(), 0.25)
 
     def set_section_filter(self, section, *_):
         self.active_section = section
@@ -840,6 +875,7 @@ class AddCardsScreen(ManaVaultScreen):
         self._spinner_frames = ["• · · ·", "· • · ·", "· · • ·", "· · · •"]
         self._frame_idx = 0
         self._loading_mode = ""
+        self._name_debounce_event = None
 
         # Card 1: Destino
         c1 = create_card_box(padding=dp(14), spacing=dp(10))
@@ -1368,10 +1404,20 @@ class AddCardsScreen(ManaVaultScreen):
                 self.custom_color_input.text = "UR"
 
     def on_name_text_changed(self, instance, text):
-        """Disparado enquanto o usuário digita: exibe sugestões instantâneas do catálogo offline e decks."""
+        """Disparado enquanto o usuário digita: exibe sugestões com debounce para máxima fluidez."""
         if getattr(self, "_suppress_suggestions", False):
             return
         query = str(text or "").strip()
+        if len(query) < 2:
+            self.suggestions_box.clear_widgets()
+            return
+        if hasattr(self, "_name_debounce_event") and self._name_debounce_event:
+            self._name_debounce_event.cancel()
+        self._name_debounce_event = Clock.schedule_once(lambda dt: self._process_name_suggestions(query), 0.25)
+
+    def _process_name_suggestions(self, query):
+        if getattr(self, "_suppress_suggestions", False):
+            return
         self.suggestions_box.clear_widgets()
         if len(query) < 2:
             return
@@ -2258,23 +2304,35 @@ class ResultsScreen(ManaVaultScreen):
 
 
 # ==============================================================================
-# TELA 7: CONSULTA DE EFEITOS
+# TELA 7: CONSULTA DE EFEITOS (ACCORDION VERTICAL)
 # ==============================================================================
 class RulesScreen(ManaVaultScreen):
-    """Consulta de 26 Regras de Combate MTG com visual moderno."""
+    """Consulta de 26 Regras de Combate MTG em estilo Accordion vertical de alta performance."""
 
     def __init__(self, app_ref, **kwargs):
         super().__init__(app_ref, **kwargs)
         self.heading("Consulta de Efeitos")
+        self.expanded_rules = set()
+        self._search_debounce_event = None
 
         search_card = create_card_box(padding=dp(14), spacing=dp(10))
         search_card.add_widget(make_label("Buscar Regra ou Efeito de Combate:", height=20, font_size=12, color=COLOR_TEXT_MUTED))
         self.search_input = make_input("Ex: Atropelar, Golpe Duplo, Iniciativa, Voar...", height=48)
-        self.search_input.bind(text=lambda *_: self.refresh())
+        self.search_input.bind(text=self._on_search_text_changed)
         search_card.add_widget(self.search_input)
+
+        actions_row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(10))
+        self.btn_expand_all = make_button("+  Expandir Todos", self.expand_all, color=COLOR_SURFACE_2, height=36, font_size=11)
+        self.btn_collapse_all = make_button("-  Recolher Todos", self.collapse_all, color=COLOR_SURFACE_2, height=36, font_size=11)
+        actions_row.add_widget(self.btn_expand_all)
+        actions_row.add_widget(self.btn_collapse_all)
+        search_card.add_widget(actions_row)
+
+        self.rules_count_label = make_label("26 efeitos de combate catalogados", height=20, font_size=11, color=COLOR_TEXT_MUTED, halign="center")
+        search_card.add_widget(self.rules_count_label)
         self.content.add_widget(search_card)
 
-        self.rules_list = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(12))
+        self.rules_list = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10))
         self.rules_list.bind(minimum_height=self.rules_list.setter("height"))
         self.content.add_widget(self.rules_list)
 
@@ -2284,12 +2342,35 @@ class RulesScreen(ManaVaultScreen):
         except (OSError, json.JSONDecodeError):
             self.rules = []
 
-    def refresh(self):
+    def _on_search_text_changed(self, instance, text):
+        if self._search_debounce_event:
+            self._search_debounce_event.cancel()
+        self._search_debounce_event = Clock.schedule_once(lambda dt: self.refresh(), 0.25)
+
+    def expand_all(self, *_):
+        self.expanded_rules = {r.get("name", "") for r in self.rules if r.get("name")}
+        self.refresh(preserve_expanded=True)
+
+    def collapse_all(self, *_):
+        self.expanded_rules.clear()
+        self.refresh(preserve_expanded=True)
+
+    def toggle_rule(self, rule_name, *_):
+        if rule_name in self.expanded_rules:
+            self.expanded_rules.remove(rule_name)
+        else:
+            self.expanded_rules.add(rule_name)
+        self.refresh(preserve_expanded=True)
+
+    def refresh(self, preserve_expanded=False):
         self.rules_list.clear_widgets()
         query = normalize_keyword_search(self.search_input.text).strip()
 
+        if query and not preserve_expanded:
+            self.expanded_rules = {r.get("name", "") for r in self.rules if r.get("name")}
+
         count = 0
-        for rule in self.rules:
+        for idx, rule in enumerate(self.rules, 1):
             name = rule.get("name", "")
             english = rule.get("english", "")
             summary = rule.get("summary", "")
@@ -2300,27 +2381,51 @@ class RulesScreen(ManaVaultScreen):
                 continue
 
             count += 1
-            card_box = create_card_box(padding=dp(14), spacing=dp(6))
+            is_open = name in self.expanded_rules
 
-            title = f"{name} ({english})" if english else name
-            card_box.add_widget(make_label(title, height=26, font_size=15, bold=True, color=COLOR_ACCENT_TEXT))
+            card_box = create_card_box(padding=dp(8) if not is_open else dp(12), spacing=dp(8))
 
-            sum_lbl = Label(text=summary, size_hint_y=None, font_size="13sp", color=COLOR_TEXT_PRIMARY, halign="left", valign="top")
-            sum_lbl.bind(width=lambda inst, val: setattr(inst, "text_size", (val, None)))
-            sum_lbl.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(26), val[1] + dp(4))))
-            card_box.add_widget(sum_lbl)
+            idx_str = f"[{idx:02d}]"
+            title_text = f"{idx_str}  {name}" + (f" ({english})" if english else "")
+            icon = "▾" if is_open else "▸"
+            btn_text = f"{icon}  {title_text}"
 
-            for heading, description in sections:
-                h_norm = normalize_keyword_search(heading)
-                h_color = COLOR_WARNING if "bloqueador" in h_norm else COLOR_ACCENT_TEXT if "atacar" in h_norm else COLOR_SUCCESS if "bloquear" in h_norm else COLOR_TEXT_MUTED
-                card_box.add_widget(make_label(f"•  {heading}", height=22, font_size=12, bold=True, color=h_color))
+            header_btn = make_button(
+                btn_text,
+                partial(self.toggle_rule, name),
+                color=COLOR_SURFACE_3 if is_open else COLOR_SURFACE_2,
+                text_color=COLOR_ACCENT_TEXT if is_open else COLOR_TEXT_PRIMARY,
+                height=48,
+                font_size=13,
+                radius=8,
+                border_color=COLOR_ACCENT if is_open else COLOR_BORDER_BLUE,
+            )
+            card_box.add_widget(header_btn)
 
-                desc_lbl = Label(text=description, size_hint_y=None, font_size="12sp", color=COLOR_TEXT_MUTED, halign="left", valign="top")
-                desc_lbl.bind(width=lambda inst, val: setattr(inst, "text_size", (val, None)))
-                desc_lbl.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(22), val[1] + dp(4))))
-                card_box.add_widget(desc_lbl)
+            if is_open:
+                body_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6), padding=[dp(4), dp(4)])
+                body_box.bind(minimum_height=body_box.setter("height"))
+
+                sum_lbl = Label(text=summary, size_hint_y=None, font_size="13sp", color=COLOR_TEXT_PRIMARY, halign="left", valign="top")
+                sum_lbl.bind(width=lambda inst, val: setattr(inst, "text_size", (val, None)))
+                sum_lbl.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(26), val[1] + dp(4))))
+                body_box.add_widget(sum_lbl)
+
+                for heading, description in sections:
+                    h_norm = normalize_keyword_search(heading)
+                    h_color = COLOR_WARNING if "bloqueador" in h_norm else COLOR_ACCENT_TEXT if "atacar" in h_norm else COLOR_SUCCESS if "bloquear" in h_norm else COLOR_TEXT_MUTED
+                    body_box.add_widget(make_label(f"•  {heading}", height=22, font_size=12, bold=True, color=h_color))
+
+                    desc_lbl = Label(text=description, size_hint_y=None, font_size="12sp", color=COLOR_TEXT_MUTED, halign="left", valign="top")
+                    desc_lbl.bind(width=lambda inst, val: setattr(inst, "text_size", (val, None)))
+                    desc_lbl.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(22), val[1] + dp(4))))
+                    body_box.add_widget(desc_lbl)
+
+                card_box.add_widget(body_box)
 
             self.rules_list.add_widget(card_box)
+
+        self.rules_count_label.text = f"{count} de {len(self.rules)} efeitos exibidos" if query else f"{len(self.rules)} efeitos de combate catalogados (toque para abrir)"
 
         if count == 0:
             empty_box = create_card_box(padding=dp(16))
@@ -2486,7 +2591,7 @@ class ManaVaultApp(App):
 
         # Footer
         footer = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8))
-        footer.add_widget(make_label("v1.14.0  ·  Armazenamento Local Protegido", height=18, font_size=11, color=COLOR_TEXT_FAINT, halign="center"))
+        footer.add_widget(make_label("v1.15.0  ·  Armazenamento Local Protegido", height=18, font_size=11, color=COLOR_TEXT_FAINT, halign="center"))
         close_btn = make_button("Fechar Menu", popup.dismiss, color=COLOR_SURFACE_3, height=42, font_size=13)
         footer.add_widget(close_btn)
         footer.bind(minimum_height=footer.setter("height"))
